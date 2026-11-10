@@ -1,0 +1,1014 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#070b14">
+<title>VisionSync — AI Smart Mirror</title>
+<style>
+:root {
+  --bg:#070b14; --panel:rgba(15,23,42,.78); --panel2:rgba(18,29,52,.78);
+  --line:rgba(116,150,210,.18); --text:#edf4ff; --muted:#91a2bd;
+  --blue:#59baff; --cyan:#65e6ef; --violet:#9b8cff; --green:#62e0b0;
+  --shadow:0 18px 55px rgba(0,0,0,.28);
+}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:
+ radial-gradient(ellipse at 15% 0%,rgba(40,104,180,.19),transparent 34%),
+ radial-gradient(ellipse at 90% 12%,rgba(95,67,190,.15),transparent 30%),var(--bg);
+ color:var(--text);font-family:Inter,Segoe UI,Arial,sans-serif}
+button,input{font:inherit}
+button{cursor:pointer}
+
+.app{display:block;min-height:100vh}
+.sidebar{display:none!important}
+.main{min-height:100vh;max-width:1460px;margin:0 auto;padding:18px 22px 26px}
+.topbar{display:flex;align-items:center;justify-content:space-between;padding:6px 0 16px;border-bottom:1px solid rgba(120,190,255,.10);margin-bottom:18px}
+.top-right{display:flex;align-items:center;gap:12px}
+.connection{background:rgba(9,20,40,.58);border:1px solid rgba(114,180,255,.16);border-radius:999px;padding:9px 14px;color:#cfe9ff}
+.avatar{width:40px;height:40px;border-radius:50%;background:linear-gradient(145deg,#1f4d79,#15233c);border:1px solid rgba(120,190,255,.18)}
+.grid{display:grid;grid-template-columns:minmax(0,1.45fr) 360px;gap:18px;align-items:start}
+.hero{padding:26px 28px 20px}
+.hero h2{font-size:38px;line-height:1.05;letter-spacing:-.03em}
+.hero p{max-width:760px;color:#9fb7d4}
+.panel, .hero{background:linear-gradient(180deg,rgba(10,20,40,.76),rgba(7,15,31,.66));backdrop-filter:blur(18px);border:1px solid rgba(116,184,255,.12);box-shadow:0 10px 40px rgba(0,0,0,.24)}
+.side-stack{display:grid;gap:18px}
+.clock-panel,.tasks-card{min-height:auto}
+.voice-only-wrap{padding-top:18px}
+.voice-only-control{justify-content:flex-start}
+.panel-title{letter-spacing:.02em}
+@media (max-width: 1120px){.grid{grid-template-columns:1fr}.side-stack{order:3}}
+
+.sidebar{border-right:1px solid var(--line);padding:26px 18px;background:rgba(7,12,24,.72);backdrop-filter:blur(18px);display:flex;flex-direction:column;gap:28px}
+.brand{display:flex;align-items:center;gap:12px;padding:4px 8px}
+.brand-mark{width:38px;height:38px;border-radius:13px;background:linear-gradient(145deg,#54caff,#7774ff);display:grid;place-items:center;color:#06101d;font-weight:900;box-shadow:0 0 25px #50baff55}
+.brand-name{font-weight:750;letter-spacing:.12em;font-size:14px}.brand-sub{font-size:10px;color:var(--muted);letter-spacing:.18em;margin-top:4px}
+.nav-label{font-size:10px;color:#687b99;letter-spacing:.18em;padding:0 12px;margin-bottom:8px}
+.nav{display:grid;gap:7px}
+.nav button{border:1px solid transparent;background:transparent;color:#aebed5;text-align:left;padding:12px;border-radius:12px;display:flex;align-items:center;gap:12px;font-size:13px}
+.nav button.active,.nav button:hover{background:linear-gradient(100deg,#153353aa,#24214aaa);border-color:#4b9edb44;color:#fff}
+.nav-icon{width:20px;text-align:center;color:var(--cyan);font-size:16px}
+.sidebar-bottom{margin-top:auto}
+.system-card{border:1px solid var(--line);background:linear-gradient(145deg,#10233b99,#17162c99);padding:14px;border-radius:15px}
+.system-title{font-size:11px;color:var(--muted);letter-spacing:.1em}
+.system-row{display:flex;justify-content:space-between;align-items:center;margin-top:12px;font-size:12px}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--green);display:inline-block;box-shadow:0 0 12px var(--green);margin-right:7px}
+.main{padding:26px 30px 30px;min-width:0;max-width:1600px;width:100%;margin:auto}
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:18px;margin-bottom:25px}
+.eyebrow{font-size:10px;letter-spacing:.2em;color:var(--cyan);text-transform:uppercase}
+h1{font-size:25px;margin:7px 0 0;letter-spacing:-.04em}
+.top-right{display:flex;align-items:center;gap:12px}
+.connection{border:1px solid var(--line);padding:9px 12px;border-radius:30px;color:#b8c8df;font-size:11px;background:#0c1729aa}
+.avatar{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;background:linear-gradient(145deg,#28618a,#6a58b7);font-size:12px;font-weight:700}
+.grid{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(270px,.85fr);gap:18px;align-items:start}
+.panel{background:linear-gradient(145deg,rgba(16,27,47,.9),rgba(10,17,31,.88));border:1px solid var(--line);border-radius:19px;box-shadow:var(--shadow);overflow:hidden}
+.panel-head{display:flex;justify-content:space-between;align-items:center;padding:17px 19px;border-bottom:1px solid var(--line)}
+.panel-title{font-size:12px;font-weight:700;letter-spacing:.1em;text-transform:uppercase}
+.panel-kicker{font-size:10px;color:var(--muted);margin-top:5px}
+.chat-panel{min-height:660px;display:flex;flex-direction:column}
+.chat-meta{display:flex;align-items:center;gap:9px;font-size:11px;color:var(--muted)}
+.ai-orb{width:9px;height:9px;border-radius:50%;background:var(--cyan);box-shadow:0 0 15px var(--cyan)}
+.messages{padding:22px;display:flex;flex-direction:column;gap:17px;flex:1;min-height:430px;max-height:570px;overflow:auto}
+.welcome{padding:18px 18px 20px;border:1px solid #5ab9ef2e;border-radius:17px;background:radial-gradient(circle at 10% 0%,#22517b44,transparent 65%),#0b1728}
+.welcome-label{font-size:10px;color:var(--cyan);letter-spacing:.18em}
+.welcome h2{font-size:22px;margin:10px 0 7px;letter-spacing:-.04em}
+.welcome p{font-size:13px;line-height:1.6;color:#a8b9d1;margin:0;max-width:620px}
+.suggestions{display:flex;flex-wrap:wrap;gap:8px;margin-top:17px}
+.suggestion{background:#102640;border:1px solid #4b9edb44;color:#c9eaff;border-radius:30px;padding:8px 11px;font-size:11px}
+.suggestion:hover{background:#17385b}
+.message{display:flex;gap:10px;max-width:90%;animation:rise .2s ease}
+.message.user{align-self:flex-end;flex-direction:row-reverse}
+.message-avatar{width:28px;height:28px;flex:0 0 28px;border-radius:10px;display:grid;place-items:center;background:#16334f;color:var(--cyan);font-size:11px;font-weight:800}
+.user .message-avatar{background:#30275b;color:#c9bfff}
+.bubble{padding:11px 14px;border:1px solid var(--line);border-radius:4px 14px 14px 14px;background:#101d30;color:#dce9fb;font-size:13px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere}
+.user .bubble{background:#242044;border-color:#7d70d344;border-radius:14px 4px 14px 14px}
+.message-time{font-size:9px;color:#6f829e;margin:5px 3px 0}
+.typing{display:flex;gap:4px;padding:5px}.typing i{width:5px;height:5px;border-radius:50%;background:var(--cyan);animation:pulse 1s infinite}.typing i:nth-child(2){animation-delay:.15s}.typing i:nth-child(3){animation-delay:.3s}
+.composer-wrap{padding:15px 18px 17px;border-top:1px solid var(--line);background:#091323aa}
+.composer{display:flex;align-items:center;gap:9px;padding:8px 9px 8px 15px;border:1px solid #4b9edb55;border-radius:15px;background:#0c1a2d;box-shadow:0 0 0 3px #49a9ed0a}
+.composer:focus-within{border-color:#59baffaa;box-shadow:0 0 0 3px #49a9ed16}
+.composer input{flex:1;min-width:0;background:transparent;border:0;outline:0;color:#fff;font-size:13px;padding:8px 0}
+.composer input::placeholder{color:#6f829e}
+.icon-btn,.send-btn{border:1px solid var(--line);background:#142741;color:#a9c8e8;border-radius:11px;width:37px;height:37px;display:grid;place-items:center;font-size:16px}
+.icon-btn:hover{border-color:#55b7ec88;color:white}
+.send-btn{background:linear-gradient(135deg,#39b9e9,#7772f5);color:#06101d;border:0;font-weight:900}
+.send-btn:hover{filter:brightness(1.12)}
+.composer-note{font-size:10px;color:#6f829e;margin:9px 4px 0;display:flex;justify-content:space-between;gap:10px}
+.side-stack{display:grid;gap:18px}
+.clock-panel{padding:19px}
+.clock{font-size:43px;letter-spacing:-.06em;font-weight:300}
+.date{font-size:12px;color:var(--muted);margin-top:5px}
+.status-line{display:flex;align-items:center;gap:8px;margin-top:18px;padding-top:14px;border-top:1px solid var(--line);font-size:11px;color:#b4c5dd}
+.status-pill{margin-left:auto;color:var(--green);font-size:10px;border:1px solid #62e0b044;padding:5px 8px;border-radius:20px}
+.task-list{padding:6px 17px 15px}
+.task{display:flex;align-items:flex-start;gap:10px;padding:11px 2px;border-bottom:1px solid #ffffff0b;font-size:12px;color:#c4d3e8}
+.task:last-child{border:0}
+.task-check{width:15px;height:15px;border:1px solid #52718f;border-radius:5px;flex:0 0 15px;margin-top:1px}
+.task small{display:block;color:#7488a5;font-size:10px;margin-top:4px}
+.empty{font-size:12px;color:#8193ad;padding:14px 2px}
+.side-foot{font-size:10px;color:#687c98;padding:0 18px 16px}
+.section-actions{display:flex;gap:7px}
+.small-btn{border:1px solid var(--line);background:#102139;color:#a9c8e8;padding:7px 9px;border-radius:9px;font-size:10px}
+.footer{display:flex;justify-content:space-between;color:#526782;font-size:10px;margin-top:20px;padding:0 3px}
+.toast{position:fixed;right:22px;bottom:22px;padding:12px 16px;border:1px solid #55b7ec66;border-radius:12px;background:#10233b;color:#d9efff;font-size:12px;box-shadow:var(--shadow);display:none}
+@keyframes pulse{0%,80%,100%{opacity:.3;transform:scale(.8)}40%{opacity:1;transform:scale(1.2)}}
+@keyframes rise{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
+@media(max-width:980px){.app{grid-template-columns:76px minmax(0,1fr)}.sidebar{padding:22px 10px}.brand{justify-content:center;padding:0}.brand-copy,.nav-label,.nav-text,.system-card{display:none}.nav button{justify-content:center;padding:13px 8px}.sidebar-bottom{display:none}.grid{grid-template-columns:1fr}.side-stack{grid-template-columns:1fr 1fr}.chat-panel{min-height:600px}}
+@media(max-width:620px){.app{display:block}.sidebar{position:fixed;z-index:5;bottom:0;left:0;right:0;height:62px;padding:7px 12px;border-right:0;border-top:1px solid var(--line);display:block}.brand{display:none}.nav{display:flex;justify-content:space-around}.nav button{flex:1;justify-content:center}.main{padding:19px 13px 84px}.topbar{align-items:flex-start}.top-right .connection{display:none}h1{font-size:21px}.grid{gap:13px}.side-stack{grid-template-columns:1fr 1fr;gap:12px}.clock{font-size:31px}.clock-panel{padding:14px}.messages{padding:14px;min-height:400px}.chat-panel{min-height:590px}.welcome h2{font-size:19px}.composer-wrap{padding:12px}.composer-note span:last-child{display:none}.footer{font-size:9px}}
+
+.voice-only-wrap{padding:22px 18px 20px}
+.voice-only-control{display:flex;align-items:center;justify-content:center;gap:18px;min-height:92px}
+.voice-main-btn{width:68px;height:68px;flex:0 0 68px;border-radius:50%;border:1px solid #59baff88;
+  background:radial-gradient(circle at 35% 25%,#2d729c,#142b4b 68%,#101b32);
+  color:#8feaff;display:grid;place-items:center;box-shadow:0 0 25px #43b8ee33;transition:.2s}
+.voice-main-btn svg{width:29px;height:29px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.voice-main-btn:hover{transform:scale(1.05);box-shadow:0 0 32px #43b8ee66}
+.voice-main-btn.active{border-color:#62e0b0;background:radial-gradient(circle at 35% 25%,#287c72,#123b42 72%);color:#8dffd2;box-shadow:0 0 30px #62e0b055}
+.voice-main-btn:disabled{opacity:.6;cursor:wait}
+.voice-only-copy{min-width:0}
+.voice-only-title{font-size:15px;font-weight:700;color:#edf4ff}
+.voice-only-sub{font-size:11px;color:#91a2bd;margin-top:6px;line-height:1.5}
+.voice-only-wrap .composer-note{margin-top:15px}
+.voice-only-wrap .composer-note span:first-child{color:#65e6ef;letter-spacing:.08em}
+.suggestions{display:none!important}
+\n
+.task-row{display:flex;align-items:flex-start;gap:9px;padding:11px 2px;border-bottom:1px solid #ffffff0b}
+.task-row:last-child{border:0}
+.task-row-text{flex:1;min-width:0;font-size:12px;color:#c4d3e8;line-height:1.45;overflow-wrap:anywhere}
+.task-row-text.completed{text-decoration:line-through;color:#72839b}
+.task-row small{display:block;color:#7488a5;font-size:9px;margin-top:4px}
+.task-actions{display:flex;gap:5px;flex-shrink:0}
+.task-action{border:1px solid var(--line);background:#102139;color:#a9c8e8;border-radius:7px;padding:5px 7px;font-size:10px}
+.task-action.complete{color:#75e4b8;border-color:#62e0b044}
+.task-action.delete{color:#ff9d9d;border-color:#ff858533}
+.task-count{color:var(--cyan);font-weight:700}
+
+
+/* ---- Magic-mirror single-window layout ---- */
+html, body {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+body { min-height: 0; }
+.app { height: 100dvh; min-height: 0; overflow: hidden; }
+.main {
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: clamp(10px, 1.5vh, 18px) clamp(14px, 1.8vw, 26px);
+}
+.topbar {
+  flex: 0 0 auto;
+  margin: 0 0 clamp(9px, 1.3vh, 15px);
+  padding: 0 0 clamp(9px, 1.3vh, 15px);
+}
+.topbar h1 { font-size: clamp(19px, 1.7vw, 25px); }
+.eyebrow { font-size: clamp(9px, .7vw, 10px); }
+.grid {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 0;
+  grid-template-columns: minmax(0, 1.65fr) minmax(275px, .85fr);
+  gap: clamp(10px, 1.2vw, 17px);
+  align-items: stretch;
+}
+.chat-panel {
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.panel-head { flex: 0 0 auto; padding: clamp(10px, 1.3vh, 16px) clamp(13px, 1.4vw, 19px); }
+.messages {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+  padding: clamp(12px, 1.5vh, 20px);
+  gap: clamp(9px, 1.1vh, 15px);
+}
+.welcome { padding: clamp(12px, 1.4vh, 18px); }
+.welcome h2 { font-size: clamp(17px, 1.6vw, 22px); margin: 7px 0 5px; }
+.welcome p { font-size: clamp(11px, .9vw, 13px); line-height: 1.45; }
+.message .bubble { font-size: clamp(11px, .9vw, 13px); padding: 8px 11px; }
+.composer-wrap.voice-only-wrap { flex: 0 0 auto; padding: clamp(9px, 1.2vh, 15px) 16px; }
+.voice-only-control { min-height: 0; gap: 13px; }
+.voice-main-btn { width: clamp(48px, 5.4vh, 62px); height: clamp(48px, 5.4vh, 62px); flex-basis: clamp(48px, 5.4vh, 62px); }
+.voice-main-btn svg { width: 25px; height: 25px; }
+.voice-only-title { font-size: 14px; }
+.voice-only-sub { font-size: 10px; margin-top: 3px; }
+.voice-only-wrap .composer-note { margin-top: 8px; font-size: 9px; }
+.side-stack {
+  min-height: 0;
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: clamp(10px, 1.2vh, 16px);
+}
+.clock-panel { padding: clamp(12px, 1.4vh, 18px); }
+.clock { font-size: clamp(29px, 3.8vh, 43px); }
+.date { font-size: 11px; margin-top: 2px; }
+.status-line { margin-top: 10px; padding-top: 9px; }
+.side-stack > .panel:last-child {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.side-stack > .panel:last-child .panel-head { flex: 0 0 auto; }
+.task-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 3px 14px 8px;
+}
+.task-row { padding: 8px 2px; }
+.task-row-text { font-size: 11px; }
+.task-row small { font-size: 8px; margin-top: 2px; }
+.task-action { padding: 4px 6px; font-size: 9px; }
+.side-foot { flex: 0 0 auto; padding: 0 14px 10px; font-size: 9px; }
+.footer {
+  flex: 0 0 auto;
+  margin-top: clamp(6px, .8vh, 10px);
+  padding: 0 3px;
+  font-size: 8px;
+}
+.toast { z-index: 20; }
+
+/* Fit smaller landscape displays without creating a page scrollbar. */
+@media (max-width: 900px) {
+  .main { padding: 9px 11px; }
+  .grid { grid-template-columns: minmax(0, 1.35fr) minmax(235px, .9fr); gap: 9px; }
+  .panel { border-radius: 14px; }
+  .panel-head { padding: 9px 11px; }
+  .task-view-toggle, .small-btn { padding: 5px 7px; font-size: 9px; }
+}
+@media (max-height: 720px) {
+  .topbar { margin-bottom: 7px; padding-bottom: 7px; }
+  .welcome { padding: 10px 12px; }
+  .welcome p { line-height: 1.3; }
+  .messages { gap: 7px; padding: 10px; }
+  .composer-wrap.voice-only-wrap { padding: 7px 12px; }
+  .voice-only-wrap .composer-note { margin-top: 5px; }
+  .side-stack { gap: 8px; }
+  .clock-panel { padding: 9px 12px; }
+  .status-line { margin-top: 6px; padding-top: 6px; }
+  .footer { display: none; }
+}
+@media (max-width: 680px) {
+  .grid { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(125px, .55fr); }
+  .side-stack { grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); grid-template-rows: minmax(0, 1fr); }
+  .clock { font-size: clamp(24px, 5vw, 34px); }
+  .side-stack > .panel:last-child .panel-head { flex-wrap: wrap; gap: 5px; }
+  .task-list { padding: 2px 9px 5px; }
+  .side-foot { display: none; }
+  .top-right .connection { display: none; }
+}
+
+
+/* =========================================================
+   VISION SYNC — AMBIENT MAGIC MIRROR SKIN
+   16:9 landscape, non-touch, glanceable, voice-first
+   ========================================================= */
+:root {
+  --bg:#03070d;
+  --panel:rgba(7,15,26,.66);
+  --panel2:rgba(9,20,34,.58);
+  --line:rgba(104,190,224,.16);
+  --text:#eaf6ff;
+  --muted:#8199ad;
+  --blue:#72cfff;
+  --cyan:#70edf0;
+  --violet:#9eabff;
+  --green:#79e6b8;
+  --shadow:0 0 34px rgba(45,160,205,.07);
+}
+html,body { background:#03070d !important; color:var(--text); }
+body {
+  background:
+    radial-gradient(ellipse at 50% 42%,rgba(12,57,78,.20),transparent 43%),
+    linear-gradient(180deg,#03070d 0%,#050b13 58%,#03070d 100%) !important;
+  font-family:"Segoe UI",Arial,sans-serif;
+}
+.main {
+  width:100%;
+  max-width:none;
+  padding:clamp(18px,2.5vw,42px) clamp(22px,3.2vw,56px);
+}
+.topbar {
+  border-bottom:1px solid rgba(112,220,238,.12);
+  margin-bottom:clamp(18px,2.5vh,30px);
+  padding-bottom:clamp(13px,1.8vh,20px);
+}
+.eyebrow {
+  color:#79dce9;
+  letter-spacing:.28em;
+  font-size:clamp(10px,.75vw,13px);
+}
+.topbar h1 {
+  font-size:clamp(25px,2.2vw,38px);
+  font-weight:350;
+  letter-spacing:.12em;
+  text-transform:uppercase;
+}
+.connection {
+  border:1px solid rgba(112,220,238,.14);
+  background:rgba(5,16,26,.42);
+  color:#a9c4d4;
+  font-size:clamp(10px,.72vw,12px);
+  letter-spacing:.08em;
+}
+.avatar {
+  background:transparent;
+  border:1px solid rgba(112,220,238,.30);
+  color:#9deaf0;
+  box-shadow:0 0 22px rgba(80,210,226,.12);
+}
+.grid {
+  grid-template-columns:minmax(0,1.7fr) minmax(300px,.72fr);
+  gap:clamp(15px,1.8vw,28px);
+}
+.panel {
+  background:linear-gradient(145deg,rgba(8,20,32,.72),rgba(5,13,23,.62));
+  border:1px solid rgba(111,201,220,.13);
+  border-radius:20px;
+  box-shadow:0 12px 48px rgba(0,0,0,.20),inset 0 1px rgba(255,255,255,.018);
+  backdrop-filter:blur(12px);
+}
+.chat-panel { position:relative; }
+.panel-head {
+  border-bottom-color:rgba(111,201,220,.10);
+  padding:clamp(14px,1.5vh,20px) clamp(17px,1.8vw,28px);
+}
+.panel-title {
+  font-size:clamp(11px,.78vw,13px);
+  letter-spacing:.20em;
+  color:#b9d8e6;
+}
+.panel-kicker { color:#708a9d; font-size:clamp(10px,.7vw,12px); }
+.chat-meta { text-transform:uppercase; letter-spacing:.14em; font-size:10px; }
+.ai-orb {
+  width:8px;height:8px;
+  box-shadow:0 0 9px var(--cyan),0 0 20px rgba(112,237,240,.45);
+}
+.messages {
+  padding:clamp(20px,2.3vw,38px);
+  gap:clamp(14px,1.8vh,24px);
+}
+.welcome {
+  border:0;
+  border-left:2px solid rgba(112,237,240,.42);
+  border-radius:0 12px 12px 0;
+  background:linear-gradient(90deg,rgba(23,83,105,.16),transparent 82%);
+  padding:clamp(18px,2vw,30px);
+}
+.welcome-label { letter-spacing:.25em; color:#82dce5; }
+.welcome h2 {
+  font-size:clamp(25px,2.5vw,42px);
+  font-weight:350;
+  letter-spacing:.015em;
+  color:#f0fbff;
+  margin:12px 0 9px;
+}
+.welcome p {
+  max-width:650px;
+  font-size:clamp(13px,1vw,16px);
+  line-height:1.75;
+  color:#9eb7c7;
+}
+.message { max-width:82%; }
+.message-avatar {
+  background:rgba(37,115,133,.20);
+  border:1px solid rgba(112,237,240,.15);
+  color:#8de6e9;
+}
+.user .message-avatar {
+  background:rgba(92,91,154,.20);
+  border-color:rgba(158,171,255,.18);
+  color:#c5caff;
+}
+.bubble {
+  background:rgba(10,25,39,.76);
+  border-color:rgba(112,190,210,.12);
+  color:#dcebf2;
+  font-size:clamp(13px,.95vw,16px);
+  line-height:1.7;
+  padding:12px 16px;
+}
+.user .bubble {
+  background:rgba(33,39,66,.62);
+  border-color:rgba(158,171,255,.16);
+}
+.message-time { color:#60798b; }
+.composer-wrap.voice-only-wrap {
+  background:linear-gradient(180deg,transparent,rgba(4,12,21,.40));
+  border-top:1px solid rgba(112,220,238,.10);
+  padding:clamp(15px,2vh,24px) 22px;
+}
+.voice-only-control { justify-content:flex-start; gap:18px; }
+.voice-main-btn {
+  width:clamp(54px,6.2vh,76px);
+  height:clamp(54px,6.2vh,76px);
+  flex-basis:clamp(54px,6.2vh,76px);
+  border:1px solid rgba(112,237,240,.40);
+  background:radial-gradient(circle at 50% 45%,rgba(25,104,119,.55),rgba(5,23,34,.82) 70%);
+  color:#91f5f0;
+  box-shadow:0 0 22px rgba(74,211,220,.12),inset 0 0 20px rgba(74,211,220,.08);
+}
+.voice-main-btn.active {
+  box-shadow:0 0 30px rgba(98,224,176,.24),inset 0 0 20px rgba(98,224,176,.08);
+}
+.voice-only-title { font-size:clamp(15px,1.1vw,19px); letter-spacing:.04em; }
+.voice-only-sub { font-size:clamp(11px,.8vw,13px); color:#8ca8b9; }
+.voice-only-wrap .composer-note {
+  color:#688798;
+  letter-spacing:.16em;
+  font-size:9px;
+}
+.side-stack { gap:clamp(13px,1.6vh,22px); }
+.clock-panel {
+  text-align:right;
+  padding:clamp(20px,2.3vw,36px);
+  background:
+    radial-gradient(circle at 80% 20%,rgba(31,112,132,.12),transparent 55%),
+    linear-gradient(145deg,rgba(8,23,35,.78),rgba(5,13,23,.62));
+}
+.clock-panel .eyebrow { color:#6d9eae; }
+.clock {
+  font-size:clamp(48px,5.6vw,88px);
+  font-weight:250;
+  letter-spacing:-.065em;
+  line-height:1.05;
+  color:#e8fbff;
+  text-shadow:0 0 30px rgba(101,230,239,.10);
+  font-variant-numeric:tabular-nums;
+}
+.date {
+  color:#8ba9b8;
+  font-size:clamp(12px,.9vw,15px);
+  letter-spacing:.04em;
+  margin-top:10px;
+}
+.status-line {
+  justify-content:flex-end;
+  color:#91a9b8;
+  font-size:10px;
+  letter-spacing:.1em;
+}
+.status-pill {
+  color:#83e9bf;
+  border-color:rgba(98,224,176,.20);
+  background:rgba(30,103,78,.12);
+}
+.task-list { padding:8px clamp(15px,1.6vw,24px) 15px; }
+.task-row { padding:clamp(10px,1.2vh,15px) 2px; border-bottom-color:rgba(255,255,255,.055); }
+.task-row-text { color:#c5d8e2; font-size:clamp(12px,.85vw,14px); }
+.task-row small { color:#6f8a9b; font-size:10px; }
+.task-action {
+  background:rgba(10,26,39,.72);
+  border-color:rgba(112,190,210,.16);
+  font-size:10px;
+}
+.task-action.complete { color:#83e9bf; }
+.task-action.delete { color:#d99a9a; }
+.task-count { color:#83e9e9; }
+.empty { color:#7894a5; font-size:12px; }
+.side-foot { color:#607b8b; letter-spacing:.04em; }
+.footer {
+  color:#4f6b7c;
+  letter-spacing:.18em;
+  text-transform:uppercase;
+}
+.toast {
+  background:rgba(6,22,33,.96);
+  border-color:rgba(112,237,240,.30);
+  color:#d9f8fa;
+  box-shadow:0 0 28px rgba(58,190,205,.12);
+}
+/* At mirror distance, avoid tiny UI and preserve the ambient composition. */
+@media (min-width:1400px) {
+  .main { padding:34px 4vw 24px; }
+  .grid { grid-template-columns:minmax(0,1.72fr) minmax(340px,.70fr); }
+  .messages { padding:34px 40px; }
+}
+@media (max-width:900px) {
+  .main { padding:12px 14px; }
+  .grid { grid-template-columns:minmax(0,1.3fr) minmax(235px,.9fr); }
+}
+@media (max-width:680px) {
+  html,body { overflow:auto; }
+  .main { min-height:100dvh;height:auto;overflow:visible;padding:14px; }
+  .grid { display:grid;grid-template-columns:1fr;grid-template-rows:minmax(380px,1fr) auto; }
+  .chat-panel { min-height:60vh; }
+  .side-stack { height:auto;grid-template-columns:1fr 1fr;grid-template-rows:auto; }
+  .clock-panel { text-align:left; }
+  .status-line { justify-content:flex-start;flex-wrap:wrap; }
+  .footer { display:none; }
+}
+
+
+/* Mirror edition: three ambient panels in the information column. */
+@media (min-width:681px) {
+  html,body {height:100%;overflow:hidden;}
+  .app{height:100dvh;min-height:0;overflow:hidden;}
+  .main{height:100dvh;min-height:0;display:flex;flex-direction:column;overflow:hidden;padding-top:clamp(12px,2vh,24px);padding-bottom:clamp(10px,1.5vh,18px);}
+  .topbar{flex:none;margin-bottom:clamp(9px,1.4vh,16px);padding-bottom:clamp(8px,1.2vh,14px);}
+  .grid{flex:1;min-height:0;height:0;align-items:stretch;}
+  .chat-panel{min-height:0;height:100%;display:flex;flex-direction:column;}
+  .messages{min-height:0;max-height:none;flex:1;overflow-y:auto;}
+  .side-stack{height:100%;min-height:0;display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1.05fr) minmax(0,.9fr);gap:clamp(8px,1.15vh,14px);}
+  .clock-panel{min-height:0;padding:clamp(12px,1.4vh,21px);}
+  .clock{font-size:clamp(34px,4.5vw,66px);}
+  .side-stack>.panel{min-height:0;overflow:hidden;}
+  .side-stack>.panel:not(.clock-panel){display:flex;flex-direction:column;}
+  .side-stack>.panel:not(.clock-panel) .panel-head{flex-shrink:0;padding:clamp(9px,1.15vh,14px) clamp(13px,1.2vw,18px);gap:8px;}
+  .side-stack .task-list,.side-stack .reminder-list{min-height:0;overflow-y:auto;flex:1;}
+  .side-stack .side-foot{flex:none;padding:4px 14px 9px;font-size:9px;}
+  .side-stack .task-row{padding:7px 2px;}
+  .side-stack .task-row-text{font-size:12px;}
+  .footer{flex:none;margin-top:7px;}
+}
+.reminders-card{background:linear-gradient(145deg,rgba(6,21,34,.82),rgba(6,15,25,.78));}
+.reminder-list{padding:5px 16px 12px;}
+.reminder-row{display:flex;align-items:flex-start;gap:11px;padding:10px 1px;border-bottom:1px solid rgba(112,220,238,.085);}
+.reminder-row:last-child{border-bottom:0;}
+.reminder-dot{width:6px;height:6px;border-radius:50%;background:#83e9bf;box-shadow:0 0 10px rgba(131,233,191,.22);flex:none;margin-top:7px;}
+.reminder-content{min-width:0;flex:1;}
+.reminder-title{color:#d7ecf4;font-size:clamp(12px,.87vw,14px);line-height:1.5;overflow-wrap:anywhere;}
+.reminder-when{color:#83dfe7;font-size:clamp(10px,.73vw,12px);letter-spacing:.03em;margin-top:4px;}
+.reminder-summary-error{color:#df9b9b!important;}
+@media (max-width:680px){
+  .side-stack{display:grid;grid-template-columns:1fr;gap:12px;}
+  .reminders-card{min-height:175px;}
+  .reminder-list{max-height:220px;overflow-y:auto;}
+}
+
+
+/* VisionSync layout rebalance: give tasks/reminders as much room as chat. */
+@media (min-width: 681px) {
+  .grid {
+    grid-template-columns: minmax(0, 1.05fr) minmax(360px, 1fr) !important;
+    gap: clamp(10px, 1.2vw, 20px);
+  }
+  .side-stack {
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: minmax(92px, .55fr) minmax(0, 1.25fr) minmax(0, 1.25fr) !important;
+    min-height: 0;
+    gap: clamp(8px, 1vh, 12px);
+  }
+  .clock-panel { padding: 12px 18px !important; }
+  .clock { font-size: clamp(31px, 3.5vw, 50px) !important; }
+  .date { margin-top: 4px; }
+  .status-line { margin-top: 7px; padding-top: 6px; }
+  .task-list, .reminder-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+  .side-stack > .panel:not(.clock-panel) { min-height: 0; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+
+  <main class="main">
+    <header class="topbar">
+      <div><div class="eyebrow">VISION SYNC · SMART MIRROR</div><h1 id="pageTitle">VISION · YOUR DAY AT A GLANCE</h1></div>
+      <div class="top-right"><div class="connection"><i class="dot"></i><span id="connectionText">VisionSync online</span></div><div class="avatar">V</div></div>
+    </header>
+
+    <div class="grid">
+      <section class="panel chat-panel" id="chatPanel">
+        <div class="panel-head">
+          <div><div class="panel-title">VISION · VOICE ASSISTANT</div><div class="panel-kicker">Hands-free intelligence · Always ready</div></div>
+          <div class="chat-meta"><span class="ai-orb"></span><span id="assistantState">Standby</span></div>
+        </div>
+        <div class="messages" id="messages" aria-live="polite">
+          <div class="welcome" id="welcome">
+            <div class="welcome-label">VISION INTELLIGENCE SYSTEM</div>
+            <h2>Good to see you.</h2>
+            <p>I'm Vision, your smart-mirror assistant. Speak naturally to me, organize your day, or manage your notes. VisionSync is voice-first: say “Vision” whenever you want to wake me.</p>
+            <div class="suggestions">
+              <button class="suggestion" data-prompt="What can you help me with?">What can you do?</button>
+              <button class="suggestion" data-prompt="Help me organize my tasks for today.">Organize my day</button>
+              <button class="suggestion" data-prompt="Let's make a note.">Make a note</button>
+            </div>
+          </div>
+        </div>
+        <div class="composer-wrap voice-only-wrap">
+          <div class="voice-only-control">
+            <button type="button" class="voice-main-btn" id="voiceBtn"
+                    title="Enable voice assistant" aria-label="Enable voice assistant">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Z"/>
+                <path d="M19 11a7 7 0 0 1-14 0M12 18v4m-4 0h8"/>
+              </svg>
+            </button>
+            <div class="voice-only-copy">
+              <div class="voice-only-title" id="voicePrompt">Talk to Vision</div>
+              <div class="voice-only-sub" id="modeLabel">Hands-free wake is starting. Just say “Vision”.</div>
+            </div>
+          </div>
+          <div class="composer-note">
+            <span>VOICE-ONLY MODE · NO TYPING REQUIRED</span>
+            <span id="voiceStateHint">WAKE WORD: VISION</span>
+          </div>
+        </div>
+      </section>
+
+      <aside class="side-stack">
+        <section class="panel clock-panel">
+          <div class="eyebrow">TIME</div>
+          <div class="clock" id="clock">--:--</div>
+          <div class="date" id="date">Loading date...</div>
+          <div class="status-line"><span class="ai-orb"></span>Vision system <span class="status-pill">READY</span></div>
+        </section>
+        <section class="panel">
+          <div class="panel-head"><div><div class="panel-title">TASKS · NEXT ACTIONS</div><div class="panel-kicker" id="taskSummary">Loading your saved tasks...</div></div><div class="section-actions"><button class="small-btn" id="taskViewToggle">Show all</button><button class="small-btn" id="refreshTasks">Refresh</button></div></div>
+          <div class="task-list" id="taskList"><div class="empty">Loading tasks from vision_notes.db...</div></div>
+          <div class="side-foot" id="taskFoot">Tasks sync with your existing VisionSync notes database.</div>
+        </section>
+        <section class="panel reminders-card" id="reminderPanel" aria-label="Upcoming reminders">
+          <div class="panel-head reminder-header">
+            <div><div class="panel-title">UPCOMING REMINDERS</div><div class="panel-kicker" id="reminderSummary">Loading reminders...</div></div>
+            <button class="small-btn" id="refreshReminders" type="button" title="Refresh reminders">Refresh</button>
+          </div>
+          <div class="reminder-list" id="reminderList" aria-live="polite">
+            <div class="empty">Connecting to reminder service...</div>
+          </div>
+        </section>
+
+      </aside>
+    </div>
+    <footer class="footer"><span>VISION SYNC · AMBIENT INTELLIGENCE</span><span>LOCAL-FIRST DESIGN · ORIN NANO TARGET</span></footer>
+  </main>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+const API_BASE = window.location.origin;
+const DEMO_MODE = false;
+const messages = document.getElementById("messages");
+const input = null; // Voice-only dashboard: messages arrive through the microphone.
+const assistantState = document.getElementById("assistantState");
+const toast = document.getElementById("toast");
+
+function updateClock(){
+  const now = new Date();
+  document.getElementById("clock").textContent = now.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
+  document.getElementById("date").textContent = now.toLocaleDateString([], {weekday:"long",year:"numeric",month:"long",day:"numeric"});
+}
+updateClock(); setInterval(updateClock,1000);
+
+function showToast(text){
+  toast.textContent=text; toast.style.display="block";
+  setTimeout(()=>toast.style.display="none",2600);
+}
+function addMessage(role,text){
+  const wrap=document.createElement("div"); wrap.className="message "+role;
+  const avatar=document.createElement("div"); avatar.className="message-avatar"; avatar.textContent=role==="user"?"YOU":"V";
+  const content=document.createElement("div"); content.style.minWidth="0";
+  const bubble=document.createElement("div"); bubble.className="bubble"; bubble.textContent=text;
+  const time=document.createElement("div"); time.className="message-time"; time.textContent=new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
+  content.append(bubble,time); wrap.append(avatar,content); messages.append(wrap); messages.scrollTop=messages.scrollHeight;
+}
+function showTyping(){
+  const wrap=document.createElement("div"); wrap.className="message"; wrap.id="typing";
+  wrap.innerHTML='<div class="message-avatar">V</div><div class="bubble"><div class="typing"><i></i><i></i><i></i></div></div>';
+  messages.append(wrap); messages.scrollTop=messages.scrollHeight;
+}
+function demoReply(text){
+  const t=text.toLowerCase();
+  if(t.includes("what can you") || t.includes("help")){
+    return "I can answer questions, help organize your day, and manage notes and tasks. The next step is connecting this interface to your existing VisionSync Python AI engine.";
+  }
+  if(t.includes("note")){
+    return "The chat interface is ready. Notes are not connected yet, so I haven't saved anything. We'll connect your existing notes database through the Python API next.";
+  }
+  if(t.includes("task") || t.includes("organize")){
+    return "Your task panel is ready for integration. Once the API is connected, Vision will be able to read, add, complete, and delete tasks from your existing notes database.";
+  }
+  return "I'm running in interface preview mode. Your message appeared successfully, but the Python AI backend is not connected yet. We'll connect ai_router.py in the next step.";
+}
+async function sendMessage(text){
+  const clean=text.trim(); if(!clean) return;
+  addMessage("user",clean);
+  assistantState.textContent="Thinking";
+  showTyping();
+  let reply="";
+  try{
+    if(DEMO_MODE){
+      await new Promise(r=>setTimeout(r,650));
+      reply=demoReply(clean);
+    }else{
+      const response=await fetch(API_BASE+"/api/chat",{
+        method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({message:clean})
+      });
+      if(!response.ok) throw new Error("API returned "+response.status);
+      const data=await response.json();
+      reply=data.response || data.reply || "I didn't receive a response.";
+    }
+  }catch(error){
+    reply="I can't reach the VisionSync backend yet. Make sure the Python API is running. ("+error.message+")";
+    showToast("Backend connection unavailable");
+  }
+  document.getElementById("typing")?.remove();
+  addMessage("assistant",reply);
+  assistantState.textContent="Standby";
+  await refreshDataPanels();
+}
+let voiceEnabled = false;
+let voicePollTimer = null;
+let voicePollBusy = false;
+
+// Refresh both panels after every completed assistant action. Fetches below
+// use no-store and sequence numbers so an older response never overwrites a
+// newer one. This is a fallback to the existing voice event feed.
+function refreshDataPanels(){
+  return Promise.allSettled([loadTasks(), loadReminders()]);
+}
+
+async function refreshVoiceStatus(){
+  try{
+    const response = await fetch(API_BASE + "/api/voice/status");
+    const data = await response.json();
+    voiceEnabled = !!data.enabled;
+    const button = document.getElementById("voiceBtn");
+    button.classList.toggle("active", voiceEnabled);
+    button.title = voiceEnabled ? "Turn voice assistant off" : "Start voice assistant";
+    button.setAttribute("aria-label", button.title);
+    document.getElementById("voicePrompt").textContent =
+      voiceEnabled ? "Vision is listening for its wake word" : "Starting hands-free listening";
+    document.getElementById("modeLabel").textContent =
+      voiceEnabled ? 'Listening for wake word “Vision” — say it to start.' : "Hands-free wake is starting. Just say “Vision”.";
+  }catch(error){
+    document.getElementById("modeLabel").textContent = "VOICE API UNAVAILABLE";
+  }
+}
+
+async function toggleVoice(){
+  const button = document.getElementById("voiceBtn");
+  button.disabled = true;
+  try{
+    const endpoint = voiceEnabled ? "/api/voice/stop" : "/api/voice/start";
+    const response = await fetch(API_BASE + endpoint, {method:"POST"});
+    const data = await response.json();
+    if(!response.ok) throw new Error(data.detail || "Voice request failed");
+    voiceEnabled = !voiceEnabled;
+    showToast(voiceEnabled ? 'Voice enabled. Say "Vision" to wake the assistant.' : "Voice assistant stopping.");
+    await refreshVoiceStatus();
+  }catch(error){
+    showToast("Could not control voice: " + error.message);
+  }finally{
+    button.disabled = false;
+  }
+}
+
+async function pollVoiceEvents(){
+  if (voicePollBusy) return;
+  voicePollBusy = true;
+  try{
+    const response = await fetch(API_BASE + "/api/voice/events");
+    if(!response.ok) return;
+    const data = await response.json();
+    for(const event of (data.events || [])){
+      if(event.type === "status"){
+        assistantState.textContent = (event.status || "standby").replace(/^./, c => c.toUpperCase());
+      }else if(event.type === "user_message"){
+        addMessage("user", event.text || "");
+        document.getElementById("typing")?.remove();
+      }else if(event.type === "assistant_message"){
+        document.getElementById("typing")?.remove();
+        addMessage("assistant", event.text || "");
+        // Refresh once per assistant response, after the Python command has
+        // finished updating SQLite. Do not block delivery of later events.
+        refreshDataPanels();
+      }else if(event.type === "wake_detected"){
+        assistantState.textContent = "Waking";
+        showToast("Vision wake word detected");
+      }else if(event.type === "error"){
+        showToast(event.message || "Voice assistant error");
+      }else if(event.type === "voice_enabled"){
+        voiceEnabled = !!event.enabled;
+      }
+    }
+    await refreshVoiceStatus();
+  }catch(error){
+    // Keep the dashboard usable if the voice endpoint is temporarily unavailable.
+  }finally{
+    voicePollBusy = false;
+  }
+}
+
+document.getElementById("voiceBtn").addEventListener("click", toggleVoice);
+// Hands-free mode: no microphone-button click is required.
+// The Python service owns the microphone and detects "Vision" in standby.
+(async function ensureHandsFreeVoice(){
+  try{
+    const statusResponse = await fetch(API_BASE + "/api/voice/status");
+    const status = await statusResponse.json();
+    if(!status.enabled){
+      await fetch(API_BASE + "/api/voice/start", {method:"POST"});
+    }
+  }catch(error){
+    console.error("Hands-free voice startup:", error);
+  }
+  await refreshVoiceStatus();
+})();
+voicePollTimer = setInterval(pollVoiceEvents, 450);
+
+let taskView = "pending";
+let taskRequestVersion = 0;
+
+async function loadTasks(){
+  const version = ++taskRequestVersion;
+  const requestedView = taskView;
+  const list = document.getElementById("taskList");
+  const summary = document.getElementById("taskSummary");
+  try{
+    const response = await fetch(API_BASE + "/api/tasks?view=" + requestedView, {cache:"no-store"});
+    if(!response.ok) throw new Error("Task API error: " + response.status);
+    const data = await response.json();
+    // A newer refresh or view switch has started: discard this old response.
+    if(version !== taskRequestVersion) return;
+
+    list.replaceChildren();
+    summary.textContent = data.count + (taskView === "pending" ? " pending task(s)" : " task(s) saved today");
+
+    if(!data.tasks || data.tasks.length === 0){
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      empty.textContent = taskView === "pending"
+        ? "No pending tasks. Tell Vision what you need to do."
+        : "No tasks have been saved today yet.";
+      list.append(empty);
+      return;
+    }
+
+    data.tasks.forEach((task, index)=>{
+      const row = document.createElement("div");
+      row.className = "task-row";
+
+      const number = document.createElement("span");
+      number.className = "task-check";
+      number.style.borderColor = task.status === "completed" ? "#62e0b0" : "";
+      if(task.status === "completed") number.style.background = "#62e0b044";
+
+      const textWrap = document.createElement("div");
+      textWrap.className = "task-row-text" + (task.status === "completed" ? " completed" : "");
+      textWrap.textContent = (index + 1) + ". " + task.note;
+
+      const meta = document.createElement("small");
+      meta.textContent = "Task ID " + task.id + " · " + (task.status || "pending");
+      textWrap.append(meta);
+
+      const actions = document.createElement("div");
+      actions.className = "task-actions";
+
+      if(task.status !== "completed"){
+        const complete = document.createElement("button");
+        complete.className = "task-action complete";
+        complete.textContent = "Done";
+        complete.title = "Mark task completed";
+        complete.addEventListener("click", ()=>updateTask(task.id, "complete"));
+        actions.append(complete);
+      }else{
+        const reopen = document.createElement("button");
+        reopen.className = "task-action";
+        reopen.textContent = "Undo";
+        reopen.title = "Reopen task";
+        reopen.addEventListener("click", ()=>updateTask(task.id, "reopen"));
+        actions.append(reopen);
+      }
+
+      const remove = document.createElement("button");
+      remove.className = "task-action delete";
+      remove.textContent = "Delete";
+      remove.title = "Delete task";
+      remove.addEventListener("click", ()=>{
+        if(window.confirm("Delete this task?")) updateTask(task.id, "delete");
+      });
+      actions.append(remove);
+
+      row.append(number, textWrap, actions);
+      list.append(row);
+    });
+  }catch(error){
+    if(version !== taskRequestVersion) return;
+    summary.textContent = "Task connection unavailable";
+    list.innerHTML = '<div class="empty">Could not load tasks. Check that the API server is running and notes.py contains the task functions.</div>';
+    console.error("Task loading failed:", error);
+  }
+}
+
+async function updateTask(taskId, action){
+  const methods = {
+    complete: {method:"PATCH", url:"/api/tasks/"+taskId+"/complete"},
+    reopen: {method:"PATCH", url:"/api/tasks/"+taskId+"/reopen"},
+    delete: {method:"DELETE", url:"/api/tasks/"+taskId}
+  };
+  try{
+    const config = methods[action];
+    const response = await fetch(API_BASE + config.url, {method:config.method});
+    const data = await response.json();
+    if(!response.ok) throw new Error(data.detail || "Task update failed");
+    showToast(data.message || "Task updated.");
+    await refreshDataPanels();
+  }catch(error){
+    showToast("Could not update task: " + error.message);
+  }
+}
+
+document.getElementById("refreshTasks").addEventListener("click", loadTasks);
+document.getElementById("taskViewToggle").addEventListener("click", ()=>{
+  taskView = taskView === "pending" ? "all" : "pending";
+  document.getElementById("taskViewToggle").textContent =
+    taskView === "pending" ? "Show all" : "Pending only";
+  loadTasks();
+});
+loadTasks();
+
+document.querySelectorAll(".nav button").forEach(btn=>{
+  btn.addEventListener("click",()=>{
+    document.querySelectorAll(".nav button").forEach(b=>b.classList.remove("active"));
+    btn.classList.add("active");
+    const view=btn.dataset.view;
+    const titles={overview:"VISION · YOUR DAY AT A GLANCE",assistant:"Vision AI assistant",tasks:"Tasks & notes",settings:"System settings"};
+    document.getElementById("pageTitle").textContent=titles[view]||"VISION · YOUR DAY AT A GLANCE";
+    if(view==="tasks") showToast("Tasks panel will connect to your notes database next.");
+    if(view==="settings") showToast("System settings will be added after backend integration.");
+    if(view==="assistant") showToast("Say “Vision” to start a voice conversation.");
+  });
+});
+
+/* ------------------------------------------------------------
+   Reminder panel — direct database API, never invented by AI.
+   ------------------------------------------------------------ */
+let reminderRequestVersion=0;
+async function loadReminders(){
+  const version=++reminderRequestVersion;
+  const list=document.getElementById('reminderList');
+  const summary=document.getElementById('reminderSummary');
+  try{
+    const response=await fetch(API_BASE+'/api/reminders',{cache:'no-store'});
+    if(!response.ok)throw new Error('Reminder API returned '+response.status);
+    const data=await response.json();
+    if(data.success===false)throw new Error('Reminder API failed');
+    if(version!==reminderRequestVersion)return;
+    const entries=Array.isArray(data.reminders)?data.reminders:[];
+    // Pending only; the service may include delivered/cancelled entries.
+    const pending=entries.filter(r=>!r.status||r.status==='pending');
+    pending.sort((a,b)=>String(a.due_at||'').localeCompare(String(b.due_at||'')));
+    summary.textContent=pending.length===1?'1 upcoming reminder':pending.length+' upcoming reminders';
+    summary.classList.remove('reminder-summary-error');
+    list.replaceChildren();
+    if(!pending.length){
+      const empty=document.createElement('div');
+      empty.className='empty';
+      empty.textContent='No upcoming reminders. Say “Vision, remind me…”';
+      list.append(empty);
+      return;
+    }
+    pending.forEach((item)=>{
+      const row=document.createElement('div');row.className='reminder-row';
+      const dot=document.createElement('span');dot.className='reminder-dot';
+      const content=document.createElement('div');content.className='reminder-content';
+      const title=document.createElement('div');title.className='reminder-title';
+      title.textContent=item.title||'Untitled reminder';
+      const when=document.createElement('div');when.className='reminder-when';
+      const raw=String(item.due_at||'');
+      const date=new Date(raw);
+      when.textContent=Number.isNaN(date.getTime())?(raw||'Date unavailable'):
+        date.toLocaleString([], {month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'});
+      content.append(title,when);row.append(dot,content);list.append(row);
+    });
+  }catch(err){
+    if(version!==reminderRequestVersion)return;
+    summary.textContent='Reminders unavailable';
+    summary.classList.add('reminder-summary-error');
+    list.replaceChildren();
+    const empty=document.createElement('div');empty.className='empty';
+    empty.textContent='Could not load reminders from /api/reminders.';
+    list.append(empty);
+    console.error('[VisionSync reminders]',err);
+  }
+}
+const reminderRefresh=document.getElementById('refreshReminders');
+reminderRefresh.addEventListener('click',loadReminders);
+loadReminders();
+// Changes made by Glass Connect or another client are not part of the local
+// voice event feed. Poll both panels at a modest cadence as a fallback.
+// API calls never read the language model and are safe to repeat.
+setInterval(()=>{
+  if(!document.hidden) refreshDataPanels();
+}, 2000);
+window.addEventListener('focus', refreshDataPanels);
+document.addEventListener('visibilitychange', ()=>{
+  if(!document.hidden) refreshDataPanels();
+});
+
+</script>
+</body>
+</html>
