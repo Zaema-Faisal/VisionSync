@@ -182,6 +182,40 @@ def search_memories(query, limit=8):
     )
     return ranked[:max_results]
 
+
+# Named relationships are stored under stable keys. A corrected value replaces
+# only its own slot, keeping parents' names separate from the user's name.
+PERSONAL_FACT_LABELS = {
+    "profile.user_name": "Your name",
+    "profile.father_name": "Your father's name",
+    "profile.mother_name": "Your mother's name",
+    "profile.favorite_ice_cream": "Your favorite ice cream flavor",
+}
+
+def set_personal_fact(slot, value):
+    if slot not in PERSONAL_FACT_LABELS:
+        raise ValueError("Unknown personal fact slot")
+    value = re.sub(r"\s+", " ", str(value or "")).strip(" .,!?:;")
+    if not value or len(value) > 120:
+        raise ValueError("Personal fact must be 1 to 120 characters")
+    return remember(f"{PERSONAL_FACT_LABELS[slot]} is {value}.",
+                    category="profile", key=slot)
+
+def get_personal_fact(slot):
+    if slot not in PERSONAL_FACT_LABELS:
+        return None
+    with _conn() as c:
+        row = c.execute("SELECT information FROM memory_items WHERE key=?", (_key(slot),)).fetchone()
+    if row is None:
+        return None
+    prefix = PERSONAL_FACT_LABELS[slot] + " is "
+    text = row["information"]
+    return text[len(prefix):].rstrip(".") if text.startswith(prefix) else text
+
+def personal_facts():
+    return {slot: value for slot in PERSONAL_FACT_LABELS
+            if (value := get_personal_fact(slot)) is not None}
+
 def forget_memory(memory_id):
     with _conn() as c:
         cur = c.execute("DELETE FROM memory_items WHERE id=?", (int(memory_id),))

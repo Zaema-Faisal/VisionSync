@@ -21,6 +21,8 @@ from memory import (
 from context_manager import context as conversation_context
 from knowledge_base import local_context, status as knowledge_status
 from reminder_manager import handle_reminder_command, recent_tasks, reset_reminder_context
+import tools as vision_tools
+
 from notes import (
     add_note,
     get_all_notes,
@@ -821,6 +823,117 @@ def handle_notes(user_message):
 
 # -------------------------- MEMORY ------------------------------
 
+# The last explicitly discussed profile field lets Vision understand short
+# corrections such as "No, it's Teena" without asking the user to repeat it.
+_last_profile_field = None
+
+_PROFILE_FIELDS = {
+    "user": ("profileusername", "Your name"),
+    "mother": ("profilemothername", "Your mother's name"),
+    "father": ("profilefathername", "Your father's name"),
+}
+
+
+def _clean_spoken_name(raw_value):
+    """Clean a name and convert clearly spelled letter sequences to a word."""
+    value = str(raw_value or "").strip(" \t\r\n.,!?;:")
+    value = re.sub(
+        r"^(?:is\s+spelled\s+as|spelled\s+as|spelled|the\s+spelling\s+is)\s+",
+        "", value, flags=re.I
+    ).strip()
+
+    # Examples: T-E-E-N-A, T E E N A, or T. E. E. N. A.
+    compact = re.sub(r"[\s.]+", "", value)
+    if re.fullmatch(r"[A-Za-z](?:-[A-Za-z]){1,19}", value):
+        value = value.replace("-", "")
+    elif re.fullmatch(r"(?:[A-Za-z]\s+){1,19}[A-Za-z]", value):
+        value = re.sub(r"\s+", "", value)
+    elif re.fullmatch(r"(?:[A-Za-z]\.\s*){1,19}[A-Za-z]\.?", value):
+        value = compact
+
+    return value.strip()
+
+
+def _profile_value(field):
+    key, label = _PROFILE_FIELDS[field]
+    rows = [row for row in list_memories(200) if row.get("key", "").lower() == key]
+    if not rows:
+        return None, label
+    return str(rows[0].get("information", "")).strip(), label
+
+
+def _save_profile_value(field, raw_value):
+    key, label = _PROFILE_FIELDS[field]
+    value = _clean_spoken_name(raw_value)
+    if not value:
+        return f"I didn't catch {label.lower()}. Please say it again."
+    if len(value) > 80:
+        return f"That doesn't look like a name. Please repeat {label.lower()}."
+
+    memory_id = remember(value, category="profile", key=key)
+    saved, _ = _profile_value(field)
+    if saved != value:
+        return "I couldn't verify the update in my memory database."
+
+    print(f"[PROFILE MEMORY VERIFIED] field={field} id={memory_id} value={value!r}")
+    return f"Saved. {label} is {value}."
+
+
+def handle_profile_memory(user_message):
+    """Handle profile questions, explicit name statements, and corrections."""
+    global _last_profile_field
+
+    text = user_message.strip()
+    lower = _normalize(text)
+
+    # Questions are read directly from SQLite, not answered by the LLM.
+    question_patterns = [
+        # Accept standard grammar and common voice phrasing:
+        # "my mother's name" and "my mother name".
+        ("mother", r"\b(?:what is|what's|tell me|who is)\s+(?:my\s+)?(?:mother'?s?|mom'?s?)\s+name\b"),
+        ("father", r"\b(?:what is|what's|tell me|who is)\s+(?:my\s+)?father'?s?\s+name\b"),
+        ("user", r"\b(?:what is|what's|tell me)\s+(?:my\s+)?name\b"),
+    ]
+    for field, pattern in question_patterns:
+        if re.search(pattern, lower, flags=re.I):
+            _last_profile_field = field
+            value, label = _profile_value(field)
+            if not value:
+                return f"I don't have {label.lower()} saved yet."
+            return f"{label} is {value}."
+
+    # Explicit statements, including spelling corrections.
+    statement_patterns = [
+        ("mother", r"\bmy\s+mother'?s?\s+name\s+is\s+(.+)$"),
+        ("mother", r"\bmy\s+mom'?s?\s+name\s+is\s+(.+)$"),
+        ("father", r"\bmy\s+father'?s?\s+name\s+is\s+(.+)$"),
+        ("user", r"\bmy\s+name\s+is\s+(.+)$"),
+    ]
+    for field, pattern in statement_patterns:
+        match = re.search(pattern, text, flags=re.I)
+        if match:
+            _last_profile_field = field
+            return _save_profile_value(field, match.group(1))
+
+    # A short correction inherits the field only when a profile field was
+    # explicitly discussed in the current process/session.
+    correction = re.match(
+        r"^(?:no[, ]+|actually[, ]+|sorry[, ]+|correction[, ]+)?"
+        r"(?:it is|it's|the correct spelling is|the spelling is)\s+(.+)$",
+        text, flags=re.I
+    )
+    if correction and _last_profile_field:
+        return _save_profile_value(_last_profile_field, correction.group(1))
+
+    # Also accept "No, not X; it is Y" when the profile field is known.
+    correction = re.match(r"^(?:no[, ]+)?(?:not\s+.+?[,;.]\s*)?it is\s+(.+)$",
+                          text, flags=re.I)
+    if correction and _last_profile_field:
+        return _save_profile_value(_last_profile_field, correction.group(1))
+
+    return None
+
+
 def handle_memory(user_message):
     """Explicit memory commands; never call an LLM for a memory mutation."""
     text = user_message.strip()
@@ -832,9 +945,9 @@ def handle_memory(user_message):
     }:
         rows = list_memories()
         if not rows:
-            return "You have no new saved personal memories yet."
+            return "You have no saved personal memories yet."
         return "Here is what I remember: " + ". ".join(
-            f"{i}. {row['information']}" for i,row in enumerate(rows,1)
+            f"{i}. {row['information']}" for i, row in enumerate(rows, 1)
         ) + "."
 
     match = re.match(
@@ -864,8 +977,224 @@ def handle_memory(user_message):
             print(f"[MEMORY SAVED] id={memory_id} text={fact!r}")
             return f"I've saved this to memory: {fact}."
 
-    # Don't automatically save names or sensitive facts from casual speech.
     return None
+
+
+
+
+# ---------------------- NATIVE TOOL CALLING -----------------------
+
+_TOOL_PARAM_TYPES = {
+    "string": {"type": "STRING"},
+    "integer": {"type": "INTEGER"},
+    "number": {"type": "NUMBER"},
+    "boolean": {"type": "BOOLEAN"},
+}
+
+def _provider_schema(schema, provider="ollama"):
+    """Translate standard JSON Schema types for Gemini or Ollama."""
+    schema = dict(schema or {})
+    kind = schema.get("type", "object")
+    if provider == "gemini":
+        schema["type"] = {
+            "object": "OBJECT", "string": "STRING", "integer": "INTEGER",
+            "number": "NUMBER", "boolean": "BOOLEAN", "array": "ARRAY",
+        }.get(kind, "STRING")
+        if "items" in schema:
+            schema["items"] = _provider_schema(schema["items"], provider)
+        if "properties" in schema:
+            schema["properties"] = {
+                key: _provider_schema(value, provider)
+                for key, value in schema["properties"].items()
+            }
+    else:
+        if "items" in schema:
+            schema["items"] = _provider_schema(schema["items"], provider)
+        if "properties" in schema:
+            schema["properties"] = {
+                key: _provider_schema(value, provider)
+                for key, value in schema["properties"].items()
+            }
+    return schema
+
+
+def _gemini_tool_declarations():
+    return [{
+        "functionDeclarations": [{
+            "name": item["name"],
+            "description": item["description"],
+            "parameters": _provider_schema(item["parameters"], "gemini"),
+        } for item in vision_tools.TOOL_DEFINITIONS]
+    }]
+
+
+def _ollama_tool_declarations():
+    return [{
+        "type": "function",
+        "function": {
+            "name": item["name"],
+            "description": item["description"],
+            "parameters": _provider_schema(item["parameters"], "ollama"),
+        },
+    } for item in vision_tools.TOOL_DEFINITIONS]
+
+
+def _is_tool_intent(user_message):
+    """Avoid spending a model round-trip on ordinary conversation."""
+    return bool(re.search(
+        r"\b(?:remind(?:er)?s?|tasks?|to-?do|notes?|remember|memory|"
+        r"forget|save (?:this|that|my)|delete|remove|complete|finish|"
+        r"reopen|what do you remember|what is my .{0,40} name|(?:mum|mom|mother|father|dad) name)\b",
+        user_message, flags=re.I
+    ))
+
+
+def _tool_system_instruction():
+    """Clear action/retrieval distinctions for both Gemini and small local models."""
+    return (
+        "You are Vision, a voice-first assistant that can use database tools. "
+        "A direct instruction to REMEMBER a fact is a SAVE request, not a question. "
+        "For example, 'remember that my mother's name is Teena', 'remember this', "
+        "'don't forget that my favorite color is blue', and 'save this fact' mean "
+        "call save_personal_memory immediately; do not merely acknowledge it "
+        "and do not ask whether the user wants it saved. "
+        "Use save_personal_memory for new facts and corrections. If a stable "
+        "memory key is already known, reuse it. Store concise values. "
+        "For QUESTIONS such as 'what is my mother's name?' or 'what do you "
+        "remember about me?', retrieve stored memories instead of saving. "
+        "For task and reminder requests, select the appropriate creation, list, "
+        "completion, reopening, or deletion tool. Never confuse a task with a reminder. "
+        "For deletion by position, list the records first, then use actual database "
+        "IDs, not list positions. If the target is ambiguous, ask for clarification. "
+        "Use the supplied local date/time to interpret relative dates. "
+        "Ask for a missing required reminder time instead of inventing one. "
+        "Never invent saved facts or IDs. Never claim that an action succeeded "
+        "unless a tool returned success. After successful execution, answer briefly."
+    )
+
+
+def _execute_requested_tool(name, arguments):
+    result = vision_tools.execute_tool(name, arguments)
+    print(f"[TOOL] {name} -> {result}")
+    return result
+
+
+def _gemini_tool_turn(messages):
+    """Gemini tool calling with a short first-response budget and bounded rounds."""
+    if not GEMINI_API_KEY:
+        return None
+
+    system_text = next((m["content"] for m in messages if m.get("role") == "system"),
+                       SYSTEM_PROMPT)
+    contents = [
+        {"role": "model" if m.get("role") == "assistant" else "user",
+         "parts": [{"text": str(m.get("content", ""))}]}
+        for m in messages if m.get("role") != "system"
+    ]
+    if contents and contents[-1]["role"] == "user":
+        contents[-1]["parts"][0]["text"] = (
+            "LOCAL DATE/TIME: " + time.strftime("%Y-%m-%d %H:%M") +
+            "\n" + contents[-1]["parts"][0]["text"]
+        )
+
+    url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+           f"{GEMINI_MODEL}:generateContent")
+    request_contents = list(contents)
+
+    for _ in range(3):
+        payload = {
+            "systemInstruction": {"parts": [{"text": system_text + "\n\n" +
+                                                _tool_system_instruction()}]},
+            "contents": request_contents,
+            "tools": _gemini_tool_declarations(),
+            "toolConfig": {"functionCallingConfig": {"mode": "AUTO"}},
+            "generationConfig": {"temperature": 0.1, "maxOutputTokens": 300},
+        }
+        response = requests.post(
+            url,
+            headers={"x-goog-api-key": GEMINI_API_KEY,
+                     "Content-Type": "application/json"},
+            json=payload,
+            # Preserve the router's four-second online-first first-response policy.
+            timeout=(5, ONLINE_FIRST_TOKEN_TIMEOUT),
+        )
+        response.raise_for_status()
+        data = response.json()
+        parts = ((data.get("candidates") or [{}])[0].get("content") or {}).get("parts", [])
+        calls = [part["functionCall"] for part in parts if "functionCall" in part]
+        if not calls:
+            answer = "".join(part.get("text", "") for part in parts)
+            return clean_ai_response(answer) or None
+
+        # Execute only the first call per round. Tool executor allow-lists names
+        # and validates arguments; database IDs are required for destructive ops.
+        call = calls[0]
+        name = call.get("name")
+        result = _execute_requested_tool(name, call.get("args") or {})
+        request_contents.extend([
+            {"role": "model", "parts": [{"functionCall": call}]},
+            {"role": "user", "parts": [{"functionResponse": {
+                "name": name, "response": {"result": result}
+            }}]},
+        ])
+
+    # Do not claim success if the model keeps requesting tools without a final answer.
+    return "I completed the available tool steps, but couldn't prepare a final response. Please check the dashboard."
+
+
+def _ollama_tool_turn(messages):
+    """Ollama native tool calling with at most three sequential tool calls."""
+    tool_messages = list(messages)
+    if tool_messages and tool_messages[0].get("role") == "system":
+        tool_messages[0] = dict(tool_messages[0])
+        tool_messages[0]["content"] += "\n\n" + _tool_system_instruction()
+    if tool_messages and tool_messages[-1].get("role") == "user":
+        tool_messages[-1] = dict(tool_messages[-1])
+        tool_messages[-1]["content"] = (
+            "LOCAL DATE/TIME: " + time.strftime("%Y-%m-%d %H:%M") +
+            "\n" + tool_messages[-1]["content"]
+        )
+
+    executed_calls = set()
+    for _ in range(3):
+        response = requests.post(
+            OLLAMA_URL,
+            json={
+                "model": FAST_MODEL,
+                "messages": tool_messages,
+                "tools": _ollama_tool_declarations(),
+                "stream": False,
+                "think": False,
+                "keep_alive": "10m",
+                "options": {"temperature": 0.1, "num_predict": 220, "num_ctx": 4096},
+            },
+            timeout=(5, LOCAL_RESPONSE_TIMEOUT),
+        )
+        response.raise_for_status()
+        message = response.json().get("message") or {}
+        calls = message.get("tool_calls") or []
+        if not calls:
+            return clean_ai_response(message.get("content", "")) or None
+
+        # Preserve the assistant tool-call message so Ollama can associate
+        # each tool result with the preceding request.
+        tool_messages.append(message)
+        for call_item in calls:
+            call = call_item.get("function") or {}
+            name = call.get("name")
+            arguments = call.get("arguments") or {}
+            call_key = (name, json.dumps(arguments, sort_keys=True, ensure_ascii=False))
+            if call_key in executed_calls:
+                result = {"success": False, "error": "This exact tool call was already attempted in this turn. Do not repeat it; ask the user for clarification if needed."}
+            else:
+                executed_calls.add(call_key)
+                result = _execute_requested_tool(name, arguments)
+            tool_messages.append({
+                "role": "tool",
+                "content": json.dumps(result, ensure_ascii=False),
+            })
+
+    return "I completed the available tool steps, but couldn't prepare a final response. Please check the dashboard."
 
 
 # -------------------------- MAIN ROUTER -------------------------
@@ -875,18 +1204,6 @@ def ask_ai(user_message):
         return "Please say something."
 
     user_message = user_message.strip()
-
-    # Speech-to-text may include the wake word in the transcript.
-    # Remove only an initial wake-word address, not occurrences in normal speech.
-    user_message = re.sub(
-        r"^(?:(?:hey|okay|ok)\s+)?vision(?:\s*[,.:!?-]\s*|\s+)",
-        "",
-        user_message,
-        count=1,
-        flags=re.IGNORECASE,
-    ).strip()
-    if not user_message:
-        return "I'm listening. What would you like me to do?"
 
     # Reminders are explicit deterministic database operations, not LLM promises.
     try:
@@ -919,6 +1236,16 @@ def ask_ai(user_message):
     except Exception as exc:
         print("[Notes handler error]", repr(exc))
         return "I encountered a problem managing your notes. Please try again."
+
+    try:
+        profile_response = handle_profile_memory(user_message)
+        if profile_response is not None:
+            update_conversation_history(user_message, profile_response)
+            conversation_context.observe(user_message, profile_response)
+            return clean_ai_response(profile_response)
+    except Exception as exc:
+        print("[Profile memory handler error]", repr(exc))
+        return "I couldn't safely update or retrieve that profile detail. Please try again."
 
     try:
         memory_response = handle_memory(user_message)
@@ -963,6 +1290,28 @@ def ask_ai(user_message):
         )
         print(f"[KNOWLEDGE] Injected {len(excerpts)} characters of local excerpts")
     answer = None
+
+    # Native tool calling is attempted only after existing deterministic
+    # reminder/task/profile handlers. Existing fast paths remain unchanged.
+    if (os.getenv("VISION_ENABLE_TOOLS", "1") != "0"
+            and _is_tool_intent(user_message)):
+        if gemini_client is not None and os.getenv("VISION_ENABLE_GEMINI", "1") != "0":
+            try:
+                tool_answer = _gemini_tool_turn(messages)
+                if tool_answer is not None:
+                    update_conversation_history(user_message, tool_answer)
+                    conversation_context.observe(user_message, tool_answer)
+                    return tool_answer
+            except Exception as exc:
+                print(f"[Gemini tool calling unavailable; continuing normal routing] {type(exc).__name__}: {exc}")
+        try:
+            tool_answer = _ollama_tool_turn(messages)
+            if tool_answer is not None:
+                update_conversation_history(user_message, tool_answer)
+                conversation_context.observe(user_message, tool_answer)
+                return tool_answer
+        except Exception as exc:
+            print(f"[Ollama tool calling unavailable; continuing normal routing] {type(exc).__name__}: {exc}")
 
     # Online-first: Gemini has four seconds to produce its first text.
     # Any failure or timeout falls back directly to Qwen3:1.7B.
