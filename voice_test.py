@@ -3,7 +3,13 @@ import re
 import json
 import time
 import threading
-import winsound
+import sys
+
+# winsound exists only on Windows. Keep the voice service importable elsewhere.
+try:
+    import winsound
+except ImportError:
+    winsound = None
 from collections import deque
 from typing import Callable, Optional
 
@@ -121,7 +127,8 @@ def speak(text):
 
     tts = None
     try:
-        tts = pyttsx3.init(driverName="sapi5")
+        # Let pyttsx3 select the native backend (SAPI5 on Windows, eSpeak on Linux).
+        tts = pyttsx3.init()
 
         voices = tts.getProperty("voices") or []
         zira = next(
@@ -155,11 +162,15 @@ def speak(text):
 
 
 def activation_sound():
+    """Play the Windows activation tones when available; no-op on other OSes."""
+    if winsound is None:
+        return
     try:
         winsound.Beep(1000, 130)
         winsound.Beep(1350, 130)
-    except Exception:
-        pass
+    except Exception as error:
+        # Audio feedback is optional; never interrupt wake-word handling.
+        print("[Activation sound unavailable]", repr(error))
 
 
 # ============================================================

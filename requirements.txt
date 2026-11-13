@@ -1,0 +1,18 @@
+# VisionSync runtime dependencies
+fastapi
+uvicorn[standard]
+pydantic
+requests
+python-dotenv
+python-docx
+pypdf
+
+# Voice input / speech recognition
+sounddevice
+numpy
+scipy
+faster-whisper
+vosk
+
+# Text-to-speech
+pyttsx3
