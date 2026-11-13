@@ -21,6 +21,7 @@ from notes import (
     reopen_note,
     delete_note_by_id,
 )
+from memory import list_memories, remember, forget_memory
 from voice_test import (
     start_voice_service,
     stop_voice_service,
@@ -50,6 +51,11 @@ class ReminderCreate(BaseModel):
 class TaskCreate(BaseModel):
     note: str = Field(min_length=1, max_length=500)
     note_date: str | None = None
+
+class MemoryCreate(BaseModel):
+    information: str = Field(min_length=1, max_length=1000)
+    category: str = Field(default="personal", max_length=80)
+    key: str | None = Field(default=None, max_length=120)
 
 _voice_events = deque(maxlen=300)
 _event_lock = Lock()
@@ -117,6 +123,47 @@ def health():
         "assistant": "Vision",
         "timestamp": datetime.now().isoformat()
     }
+
+# -------------------- MEMORY API --------------------
+
+@app.get("/api/memories")
+def memory_list():
+    """Return saved memories; database IDs are retained only for internal actions."""
+    try:
+        return {"success": True, "memories": list_memories(200)}
+    except Exception as error:
+        print("[MEMORY LIST ERROR]", repr(error))
+        raise HTTPException(status_code=500, detail="Could not load memories.")
+
+@app.post("/api/memories")
+def memory_add(request: MemoryCreate):
+    try:
+        memory_id = remember(
+            request.information.strip(),
+            category=request.category.strip() or "personal",
+            key=request.key.strip() if request.key else None,
+        )
+        row = next((item for item in list_memories(200) if int(item["id"]) == int(memory_id)), None)
+        if row is None:
+            raise RuntimeError("Saved memory could not be verified.")
+        return {"success": True, "memory": row}
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    except Exception as error:
+        print("[MEMORY SAVE ERROR]", repr(error))
+        raise HTTPException(status_code=500, detail="Could not save memory.")
+
+@app.delete("/api/memories/{memory_id}")
+def memory_remove(memory_id: int):
+    try:
+        if not forget_memory(memory_id):
+            raise HTTPException(status_code=404, detail="Memory not found.")
+        return {"success": True, "deleted": True}
+    except HTTPException:
+        raise
+    except Exception as error:
+        print("[MEMORY DELETE ERROR]", repr(error))
+        raise HTTPException(status_code=500, detail="Could not delete memory.")
 
 @app.post("/api/chat")
 def chat(request: ChatRequest):

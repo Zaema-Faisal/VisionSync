@@ -21,7 +21,7 @@ from reminder_manager import (
     list_reminders as _list_reminders,
     delete_reminder as _delete_reminder,
 )
-from memory import remember, list_memories, search_memories, forget_memory
+from memory import remember, list_memories, search_memories, forget_memory, forget_memory_by_text
 
 
 def _clean_text(value: Any, field: str, limit: int = 500) -> str:
@@ -128,26 +128,6 @@ def save_personal_memory(information: str, category: str = "personal",
                          key: str | None = None) -> dict:
     information = _clean_text(information, "Memory", 1000)
 
-    # Use a stable database key for the same known relationship, even if the
-    # language model invents variants such as "mothers name".  This narrow
-    # normalization intentionally does not rewrite arbitrary personal facts.
-    normalized_key = re.sub(r"[^a-z0-9]", "", (key or "").lower())
-    mother_key_aliases = {"profilemothername", "mothername", "mothersname", "momsname", "mumname"}
-    mother_statement = re.fullmatch(
-        r"(?:remember\s+that\s+)?(?:my|your)\s+(?:mother(?:'s|s)?|mom(?:'s|s)?|mum(?:'s|s)?)\s+name\s+is\s+(.+)",
-        information.strip().rstrip("."), flags=re.IGNORECASE,
-    )
-    if normalized_key in mother_key_aliases or mother_statement:
-        # A relationship key makes the subject clear.  Reject full-sentence
-        # values we cannot safely parse instead of storing malformed data.
-        if mother_statement:
-            information = mother_statement.group(1).strip().rstrip(".")
-        elif re.search(r"\b(?:mother|mom|mum)\b", information, re.IGNORECASE):
-            raise ValueError("Mother's name must be a name or a clear 'my mother's name is ...' statement.")
-        information = _clean_text(information, "Mother's name", 150)
-        key = "profilemothername"
-        category = "profile"
-
     memory_id = remember(information, category=category, key=key)
     row = next((x for x in list_memories(200) if int(x["id"]) == int(memory_id)), None)
     if row is None:
@@ -165,10 +145,22 @@ def list_personal_memories(limit: int = 50) -> list[dict]:
 
 
 def delete_personal_memory(memory_id: int) -> dict:
+    """Legacy internal-ID deletion; IDs are not intended for user display."""
     memory_id = int(memory_id)
     if not forget_memory(memory_id):
         raise ValueError("Memory record not found.")
+    if any(int(row["id"]) == memory_id for row in list_memories(200)):
+        raise RuntimeError("Memory deletion could not be verified in SQLite.")
     return {"success": True, "id": memory_id, "deleted": True}
+
+
+def delete_personal_memory_by_text(description: str) -> dict:
+    """Delete one unambiguous memory by its saved wording or key."""
+    description = _clean_text(description, "Memory description", 300)
+    result = forget_memory_by_text(description)
+    if not result.get("success"):
+        raise ValueError(result.get("error", "Memory could not be deleted."))
+    return result
 
 
 TOOL_FUNCTIONS = {
@@ -181,6 +173,7 @@ TOOL_FUNCTIONS = {
     "retrieve_personal_memory": retrieve_personal_memory,
     "list_personal_memories": list_personal_memories,
     "delete_personal_memory": delete_personal_memory,
+    "delete_personal_memory_by_text": delete_personal_memory_by_text,
 }
 
 # Human-readable descriptions. Parameter schemas are generated from the real
@@ -198,7 +191,8 @@ TOOL_DESCRIPTIONS = {
     "save_personal_memory": "Save or correct a personal fact. For mother name, use key profilemothername and store just the name (e.g. Teena).",
     "retrieve_personal_memory": "Search saved personal memories using a natural-language query.",
     "list_personal_memories": "List saved personal memories.",
-    "delete_personal_memory": "Delete a saved memory using its database ID.",
+    "delete_personal_memory": "Legacy internal operation. Prefer deleting memories by their saved wording, not database IDs.",
+    "delete_personal_memory_by_text": "Delete one unambiguous saved memory by describing its content. Never ask the user for a database ID.",
 }
 
 

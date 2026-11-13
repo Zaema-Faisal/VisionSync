@@ -51,9 +51,55 @@ def save_memory(user, information):
         )
         return cur.lastrowid
 
+def _normalize_profile_memory(information, category, key):
+    """Normalize only well-identified profile facts, never guess from a bare name.
+
+    A plain value such as 'Teena' without a relationship key/category is *not*
+    enough evidence to infer whose name it is.
+    """
+    info = re.sub(r"\s+", " ", str(information or "")).strip().rstrip(".")
+    raw_key = re.sub(r"[^a-z0-9]", "", str(key or "").lower())
+    raw_category = re.sub(r"[^a-z0-9]", "", str(category or "").lower())
+    aliases = {
+        "profilemothername": "profilemothername", "mothername": "profilemothername",
+        "mothersname": "profilemothername", "momname": "profilemothername",
+        "momsname": "profilemothername", "mumname": "profilemothername",
+        "profilefathername": "profilefathername", "fathername": "profilefathername",
+        "fathersname": "profilefathername", "dadname": "profilefathername",
+        "dadsname": "profilefathername",
+        "profileusername": "profileusername", "username": "profileusername",
+        "profilemothername": "profilemothername", "profilefathername": "profilefathername",
+        "myname": "profileusername", "usersname": "profileusername",
+    }
+    # Do not infer the fact from the *value*. Match relationships only.
+    target = aliases.get(raw_key) or aliases.get(raw_category)
+    patterns = (
+        ("profilemothername", r"^(?:(?:remember|please remember)(?: that)?\s+)?(?:my|your)\s+(?:mother(?:'s|s)?|mom(?:'s|s)?|mum(?:'s|s)?)\s+name\s+is\s+(.+)$"),
+        ("profilefathername", r"^(?:(?:remember|please remember)(?: that)?\s+)?(?:my|your)\s+(?:father(?:'s|s)?|dad(?:'s|s)?)\s+name\s+is\s+(.+)$"),
+        ("profileusername", r"^(?:(?:remember|please remember)(?: that)?\s+)?(?:my|your)\s+name\s+is\s+(.+)$"),
+    )
+    match_target = None
+    for slot, pattern in patterns:
+        found = re.match(pattern, info, re.I)
+        if found:
+            match_target = slot
+            info = found.group(1).strip(" .,!?:;")
+            break
+    # Reject contradictory metadata, rather than misclassify a relationship.
+    if target and match_target and target != match_target:
+        raise ValueError("Conflicting profile relationship in memory fields.")
+    target = target or match_target
+    if target:
+        info = info.strip(" .,!?:;")
+        if not info or len(info) > 150:
+            raise ValueError("Profile value must contain 1 to 150 characters.")
+        return info, "profile", target
+    return info, category, key
+
+
 def remember(information, category="personal", key=None):
     """Save an explicit fact; exact duplicate or key overwrites instead of duplicating."""
-    info = re.sub(r"\s+", " ", str(information or "")).strip().rstrip(".")
+    info, category, key = _normalize_profile_memory(information, category, key)
     if not info or len(info) > 1000:
         raise ValueError("Memory must contain 1 to 1000 characters.")
     identity = _key(key or info)
@@ -198,8 +244,7 @@ def set_personal_fact(slot, value):
     value = re.sub(r"\s+", " ", str(value or "")).strip(" .,!?:;")
     if not value or len(value) > 120:
         raise ValueError("Personal fact must be 1 to 120 characters")
-    return remember(f"{PERSONAL_FACT_LABELS[slot]} is {value}.",
-                    category="profile", key=slot)
+    return remember(value, category="profile", key=slot)
 
 def get_personal_fact(slot):
     if slot not in PERSONAL_FACT_LABELS:
@@ -235,6 +280,17 @@ def forget_matching(query):
     match = matches[0]
     forget_memory(match["id"])
     return ("deleted", match)
+
+
+def forget_memory_by_text(description):
+    """Delete a memory by its content/key, without exposing database IDs."""
+    status, result = forget_matching(description)
+    if status == "deleted":
+        return {"success": True, "deleted": True, "information": result["information"]}
+    if status == "ambiguous":
+        return {"success": False, "error": "More than one memory matches. Please use a more specific description."}
+    return {"success": False, "error": "No matching memory was found."}
+
 
 def get_memory():
     """Legacy-facing string. Reads old and new tables; stays bounded."""

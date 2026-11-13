@@ -9,6 +9,7 @@ import re
 import json
 import time
 import requests
+from difflib import SequenceMatcher
 from dotenv import load_dotenv
 
 # Load local environment variables before reading configuration.
@@ -38,7 +39,9 @@ from notes import (
 
 OLLAMA_URL = "http://127.0.0.1:11434/api/chat"
 FAST_MODEL = "qwen3:1.7b"
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
+# Gemini model names are configurable in .env. The default is a currently
+# documented model; do not hard-code an obsolete model alias.
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip() or "gemini-3.8-flash"
 
 # Gemini credentials are loaded from the local .env file.
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
@@ -621,10 +624,12 @@ def handle_notes(user_message):
     )):
         return _task_list_response(True)
 
-    # Number-based task actions.
-    if re.search(r"\b(delete|remove)\b", lower) and re.search(
-        r"\b(first|second|third|fourth|fifth|one|two|three|four|five|\d+)\b", lower
-    ):
+    # Never interpret an ordinal as a TASK without an explicit task domain.
+    # In particular, "delete the first point about me" is not a task command.
+    if (re.search(r"\b(delete|remove)\b", lower)
+            and re.search(r"\b(?:tasks?|notes?|to[ -]?dos?)\b", lower)
+            and not re.search(r"\b(?:memor(?:y|ies)|remember|points?|facts?|about me)\b", lower)
+            and re.search(r"\b(first|second|third|fourth|fifth|one|two|three|four|five|\d+)\b", lower)):
         return _handle_numbered_action(message, "delete")
 
     if re.search(r"\b(mark|set|complete|finish)\b", lower) and \
@@ -835,23 +840,36 @@ _PROFILE_FIELDS = {
 
 
 def _clean_spoken_name(raw_value):
-    """Clean a name and convert clearly spelled letter sequences to a word."""
+    """Extract a clean name; never store a whole dictated correction sentence."""
     value = str(raw_value or "").strip(" \t\r\n.,!?;:")
-    value = re.sub(
-        r"^(?:is\s+spelled\s+as|spelled\s+as|spelled|the\s+spelling\s+is)\s+",
-        "", value, flags=re.I
-    ).strip()
-
-    # Examples: T-E-E-N-A, T E E N A, or T. E. E. N. A.
-    compact = re.sub(r"[\s.]+", "", value)
+    # 'It's not Zeyma, it is just spelled as Z-A-E-M-A' must yield Zaema.
+    spelled = re.search(
+        r"\b(?:just\s+)?(?:spelled|spelt)\s+(?:as\s+)?"
+        r"((?:[A-Za-z][.\s-]*-?){2,20})\s*[.!?]*$",
+        value, flags=re.I,
+    )
+    if spelled:
+        candidate = spelled.group(1).strip(" .-\t")
+        letters = re.findall(r"[A-Za-z]", candidate)
+        if letters and re.fullmatch(r"(?:[A-Za-z][.\s-]*-?){2,20}", candidate):
+            # Explicit spelling is a sequence of single letters, not normal words.
+            tokens = re.findall(r"[A-Za-z]+", candidate)
+            if len(tokens) >= 2 and all(len(token) == 1 for token in tokens):
+                return "".join(letters).title()
+    value = re.sub(r"^(?:(?:my|your)\s+)?(?:name\s+is\s+)", "", value, flags=re.I)
+    value = re.sub(r"^(?:is\s+spelled\s+as|spelled\s+as|spelled|the\s+spelling\s+is)\s+", "", value, flags=re.I)
+    value = re.sub(r"^(?:my|your)\s+(?:mother|father|mom|dad)(?:'s|s)?\s+name\s+is\s+", "", value, flags=re.I)
     if re.fullmatch(r"[A-Za-z](?:-[A-Za-z]){1,19}", value):
         value = value.replace("-", "")
-    elif re.fullmatch(r"(?:[A-Za-z]\s+){1,19}[A-Za-z]", value):
-        value = re.sub(r"\s+", "", value)
-    elif re.fullmatch(r"(?:[A-Za-z]\.\s*){1,19}[A-Za-z]\.?", value):
-        value = compact
-
-    return value.strip()
+    elif re.fullmatch(r"(?:[A-Za-z][.\s]+){1,19}[A-Za-z]\.?", value):
+        value = re.sub(r"[.\s]", "", value)
+    # Reject compound sentences, negative statements, and other obviously
+    # incorrect profile values instead of poisoning permanent memory.
+    if (not re.fullmatch(r"[A-Za-z][A-Za-z' -]{0,59}", value)
+            or re.search(r"\b(?:not|spelled|spell|actually|it is|your name|my name)\b", value, re.I)
+            or len(value.split()) > 4):
+        return ""
+    return value.strip().title()
 
 
 def _profile_value(field):
@@ -859,55 +877,111 @@ def _profile_value(field):
     rows = [row for row in list_memories(200) if row.get("key", "").lower() == key]
     if not rows:
         return None, label
-    return str(rows[0].get("information", "")).strip(), label
+    raw = str(rows[0].get("information", "")).strip()
+    value = _clean_spoken_name(raw)
+    return (value or None), label
 
 
 def _save_profile_value(field, raw_value):
     key, label = _PROFILE_FIELDS[field]
     value = _clean_spoken_name(raw_value)
     if not value:
-        return f"I didn't catch {label.lower()}. Please say it again."
-    if len(value) > 80:
-        return f"That doesn't look like a name. Please repeat {label.lower()}."
-
-    memory_id = remember(value, category="profile", key=key)
-    saved, _ = _profile_value(field)
-    if saved != value:
+        return (f"I couldn't identify a valid {label.lower()} in that sentence. "
+                "Please spell the name, for example: My name is Z-A-E-M-A.")
+    try:
+        memory_id = remember(value, category="profile", key=key)
+        saved, _ = _profile_value(field)
+    except Exception as exc:
+        print("[PROFILE SAVE ERROR]", repr(exc))
+        return "I couldn't save the name. Please try again."
+    if saved is None or saved.casefold() != value.casefold():
         return "I couldn't verify the update in my memory database."
-
     print(f"[PROFILE MEMORY VERIFIED] field={field} id={memory_id} value={value!r}")
     return f"Saved. {label} is {value}."
 
 
 def handle_profile_memory(user_message):
-    """Handle profile questions, explicit name statements, and corrections."""
+    """Answer profile questions and parse safe, explicit spelling corrections."""
     global _last_profile_field
-
     text = user_message.strip()
     lower = _normalize(text)
 
-    # Questions are read directly from SQLite, not answered by the LLM.
     question_patterns = [
-        # Accept standard grammar and common voice phrasing:
-        # "my mother's name" and "my mother name".
         ("mother", r"\b(?:what is|what's|tell me|who is)\s+(?:my\s+)?(?:mother'?s?|mom'?s?)\s+name\b"),
         ("father", r"\b(?:what is|what's|tell me|who is)\s+(?:my\s+)?father'?s?\s+name\b"),
         ("user", r"\b(?:what is|what's|tell me)\s+(?:my\s+)?name\b"),
+        ("user", r"\b(?:so\s+)?what\s+is\s+my\s+name\s+now\b"),
     ]
     for field, pattern in question_patterns:
         if re.search(pattern, lower, flags=re.I):
             _last_profile_field = field
             value, label = _profile_value(field)
             if not value:
-                return f"I don't have {label.lower()} saved yet."
+                return (f"I don't have a valid {label.lower()} saved. "
+                        "Please tell me the correct spelling.")
             return f"{label} is {value}."
 
-    # Explicit statements, including spelling corrections.
+    # Corrections with an explicit spelling win over 'it is not X' noise.
+    # Example: 'It is not your name is Zeyma, it is just spelled as Z-A-E-M-A.'
+    spelled = re.search(
+        r"\b(?:spelled|spelt)\s+(?:as\s+)?"
+        r"((?:[A-Za-z][.\s-]*-?){2,20})\s*[.!?]*$", text, flags=re.I,
+    )
+    if spelled:
+        candidate = spelled.group(1)
+        tokens = re.findall(r"[A-Za-z]+", candidate)
+        if len(tokens) >= 2 and all(len(token) == 1 for token in tokens):
+            field = ("mother" if re.search(r"\b(?:mother|mom|mum)\b", lower) else
+                     "father" if re.search(r"\b(?:father|dad)\b", lower) else
+                     "user" if re.search(r"\b(?:my name|your name|name is)\b", lower) else
+                     _last_profile_field)
+            if field is None:
+                return "Which name are you correcting: yours, your mother's, or your father's?"
+            _last_profile_field = field
+            return _save_profile_value(field, candidate)
+
+    # Recognize a spelling-only correction, not just "spelled as ...".
+    # Voice examples:
+    #   "Now, actually there is a little correction in it, it is Z-A-E-M-A."
+    #   "The spelling of my name is not correct, it is Z-A-E-M-A."
+    # This must happen before the request reaches an LLM: an LLM's reply that
+    # a name was updated is not evidence of a SQLite write.
+    spelled_letters = re.search(
+        r"(?<![A-Za-z])([A-Za-z](?:\s*[-.]\s*|\s+)[A-Za-z]"
+        r"(?:(?:\s*[-.]\s*|\s+)[A-Za-z]){1,19})\s*[.!?]*$",
+        text, flags=re.I,
+    )
+    if spelled_letters:
+        candidate = spelled_letters.group(1)
+        letters = re.findall(r"[A-Za-z]+", candidate)
+        # Restrict spelling extraction to separate single-letter tokens.
+        if len(letters) >= 3 and all(len(part) == 1 for part in letters):
+            name_context = re.search(
+                r"\b(?:my\s+name|your\s+name|name\s+is|spelling\s+of\s+my\s+name)\b",
+                lower,
+            )
+            correction_context = re.search(
+                r"\b(?:correct(?:ion|ing)?|actually|spell(?:ed|ing)?|"
+                r"not\s+correct|it\s+is|it's|no\s+it\s+is)\b",
+                lower,
+            )
+            if name_context or (correction_context and _last_profile_field):
+                if re.search(r"\b(?:mother|mom|mum)\b", lower):
+                    field = "mother"
+                elif re.search(r"\b(?:father|dad)\b", lower):
+                    field = "father"
+                elif name_context:
+                    field = "user"
+                else:
+                    field = _last_profile_field
+                _last_profile_field = field
+                return _save_profile_value(field, candidate)
+
     statement_patterns = [
-        ("mother", r"\bmy\s+mother'?s?\s+name\s+is\s+(.+)$"),
-        ("mother", r"\bmy\s+mom'?s?\s+name\s+is\s+(.+)$"),
-        ("father", r"\bmy\s+father'?s?\s+name\s+is\s+(.+)$"),
-        ("user", r"\bmy\s+name\s+is\s+(.+)$"),
+        ("mother", r"^\s*my\s+mother'?s?\s+name\s+is\s+(.+)$"),
+        ("mother", r"^\s*my\s+mom'?s?\s+name\s+is\s+(.+)$"),
+        ("father", r"^\s*my\s+father'?s?\s+name\s+is\s+(.+)$"),
+        ("user", r"^\s*my\s+name\s+is\s+(.+)$"),
     ]
     for field, pattern in statement_patterns:
         match = re.search(pattern, text, flags=re.I)
@@ -915,57 +989,329 @@ def handle_profile_memory(user_message):
             _last_profile_field = field
             return _save_profile_value(field, match.group(1))
 
-    # A short correction inherits the field only when a profile field was
-    # explicitly discussed in the current process/session.
+    # Only simple corrections may inherit the immediately discussed field.
     correction = re.match(
         r"^(?:no[, ]+|actually[, ]+|sorry[, ]+|correction[, ]+)?"
         r"(?:it is|it's|the correct spelling is|the spelling is)\s+(.+)$",
-        text, flags=re.I
+        text, flags=re.I,
     )
     if correction and _last_profile_field:
         return _save_profile_value(_last_profile_field, correction.group(1))
-
-    # Also accept "No, not X; it is Y" when the profile field is known.
-    correction = re.match(r"^(?:no[, ]+)?(?:not\s+.+?[,;.]\s*)?it is\s+(.+)$",
-                          text, flags=re.I)
-    if correction and _last_profile_field:
-        return _save_profile_value(_last_profile_field, correction.group(1))
-
     return None
 
 
+_pending_memory_bulk_delete = None
+
+
+def _memory_profile_identity(row):
+    """Return a canonical profile slot/value pair when the row is recognizable."""
+    key = re.sub(r"[^a-z0-9]", "", str(row.get("key", "")).lower())
+    category = re.sub(r"[^a-z0-9]", "", str(row.get("category", "")).lower())
+    aliases = {
+        "profilemothername": "mother", "mothername": "mother",
+        "mothersname": "mother", "momname": "mother", "momsname": "mother",
+        "mumname": "mother", "mumsname": "mother",
+        "profilefathername": "father", "fathername": "father",
+        "fathersname": "father", "dadname": "father", "dadsname": "father",
+        "profileusername": "user", "username": "user", "myname": "user",
+        "usersname": "user",
+    }
+    slot = aliases.get(key) or aliases.get(category)
+    info = re.sub(r"\s+", " ", str(row.get("information", ""))).strip().rstrip(".")
+    patterns = {
+        "mother": r"^(?:my|your)\s+(?:mother(?:'s|s)?|mom(?:'s|s)?|mum(?:'s|s)?)\s+name\s+is\s+(.+)$",
+        "father": r"^(?:my|your)\s+(?:father(?:'s|s)?|dad(?:'s|s)?)\s+name\s+is\s+(.+)$",
+        "user": r"^(?:my|your)\s+name\s+is\s+(.+)$",
+    }
+    for candidate, pattern in patterns.items():
+        match = re.match(pattern, info, flags=re.I)
+        if match:
+            if slot and slot != candidate:
+                return None
+            slot = candidate
+            info = match.group(1).strip(" .,!?:;")
+            break
+    if slot:
+        return slot, _normalize(info)
+    return None
+
+
+def _memory_groups(rows):
+    """Collapse duplicate visible facts while retaining every underlying row."""
+    groups = []
+    by_identity = {}
+    labels = {"mother": "Mother's name", "father": "Father's name", "user": "Your name"}
+    for row in rows:
+        info = str(row.get("information", "")).strip()
+        if not info:
+            continue
+        profile = _memory_profile_identity(row)
+        if profile:
+            slot, value = profile
+            identity = ("profile", slot, value)
+            label = labels[slot]
+            has_subject_prefix = re.match(r"^(?:my|your)\s+", info, re.I) is not None
+            display_value = info if not has_subject_prefix else value
+            display = f"{label}: {display_value}"
+        else:
+            identity = ("text", _normalize(info))
+            label = info
+            display = info
+        if identity in by_identity:
+            by_identity[identity]["rows"].append(row)
+        else:
+            group = {"identity": identity, "label": label, "display": display,
+                     "information": info, "rows": [row]}
+            by_identity[identity] = group
+            groups.append(group)
+    return groups
+
+
+def _memory_list_text(groups):
+    """Render unique memories with temporary spoken positions, never database IDs."""
+    if not groups:
+        return "You have no saved personal memories yet."
+    labels = [f"{index}. {group['display']}" for index, group in enumerate(groups, 1)]
+    return "Here is what I remember about you: " + "; ".join(labels) + "."
+
+
+def _memory_ordinal(text):
+    """Extract an ordinal only when it is grammatically tied to a memory item."""
+    normalized = _normalize(text)
+    ordinal = r"(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|1st|2nd|3rd|4th|5th|6th|7th|8th|9th|10th|one|two|three|four|five|six|seven|eight|nine|ten|\d+)"
+    words = {"first": 1, "1st": 1, "one": 1, "second": 2, "2nd": 2, "two": 2,
+             "third": 3, "3rd": 3, "three": 3, "fourth": 4, "4th": 4, "four": 4,
+             "fifth": 5, "5th": 5, "five": 5, "sixth": 6, "6th": 6, "six": 6,
+             "seventh": 7, "7th": 7, "seven": 7, "eighth": 8, "8th": 8, "eight": 8,
+             "ninth": 9, "9th": 9, "nine": 9, "tenth": 10, "10th": 10, "ten": 10}
+    patterns = [
+        rf"\b(?:the\s+)?{ordinal}(?:st|nd|rd|th)?\s+(?:memory|memories|entry|entries|point|points|one)\b",
+        rf"\b(?:memory|memories)\s+(?:number\s+|no\.?\s*){ordinal}\b",
+        rf"\b(?:memory|memories)\s+{ordinal}\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, normalized)
+        if match:
+            token = match.group(1)
+            return words.get(token, int(token) if token.isdigit() else None)
+    return None
+
+
+def _is_bulk_memory_delete(lower):
+    return bool(re.search(r"\b(?:delete|remove|forget|erase|clear)\b", lower) and
+                re.search(r"\b(?:all|every)\b.{0,35}\b(?:my\s+)?memories?\b|\b(?:my\s+)?memories\s+(?:all|everything)\b", lower))
+
+
+def _memory_group_for_description(groups, description):
+    """Find one visible memory group by exact/substring text; never guess-delete."""
+    query = _normalize(description)
+    if not query:
+        return None, [], None
+    exact = []
+    for group in groups:
+        candidates = [group["display"], group["information"], group["label"]]
+        candidates.extend(str(r.get("key", "")) for r in group["rows"])
+        if any(query == _normalize(value) or query in _normalize(value) for value in candidates if value):
+            exact.append(group)
+    if len(exact) == 1:
+        return exact[0], exact, None
+    if len(exact) > 1:
+        return None, exact, None
+
+    # Conservative suggestion-only fuzzy matching for short spoken names.
+    if len(query.split()) == 1 and len(query) >= 3:
+        suggestions = []
+        for group in groups:
+            value = _normalize(group["information"])
+            if len(value.split()) == 1:
+                score = SequenceMatcher(None, query, value).ratio()
+                if score >= 0.62:
+                    suggestions.append((score, group))
+        suggestions.sort(key=lambda item: item[0], reverse=True)
+        if suggestions and (len(suggestions) == 1 or suggestions[0][0] - suggestions[1][0] >= 0.08):
+            return None, [], suggestions[0][1]
+    return None, [], None
+
+
+def _delete_memory_group(group):
+    """Delete all duplicate database rows represented by one visible fact."""
+    deleted = 0
+    for row in group["rows"]:
+        result = vision_tools.execute_tool("delete_personal_memory", {"memory_id": int(row["id"])})
+        if not result.get("success"):
+            return False, deleted, result.get("error", "A memory record could not be deleted.")
+        deleted += 1
+    return True, deleted, None
+
+
 def handle_memory(user_message):
-    """Explicit memory commands; never call an LLM for a memory mutation."""
+    """Handle memory reads, saves, corrections and deletions deterministically."""
+    global _pending_memory_bulk_delete
     text = user_message.strip()
     lower = _normalize(text)
 
-    if lower in {
-        "what do you remember about me", "what do you remember",
-        "show my memories", "list my memories", "tell me what you remember"
-    }:
-        rows = list_memories()
-        if not rows:
-            return "You have no saved personal memories yet."
-        return "Here is what I remember: " + ". ".join(
-            f"{i}. {row['information']}" for i, row in enumerate(rows, 1)
-        ) + "."
+    # The user is asking WHAT was remembered, not instructing us to save
+    # a new memory. These phrases are common in imperfect STT transcripts.
+    # Never let them fall through to LLM function calling.
+    if (re.search(r"\b(?:remember|remembered|memories|memory)\b", lower)
+            and (re.search(r"\b(?:what|tell me|show|list|read)\b", lower)
+                 or re.search(r"\bremember\s+about\s+me\b", lower))
+            and not re.search(r"\b(?:first|second|third|fourth|fifth|\d+(?:st|nd|rd|th)?)\b", lower)
+            and not re.search(r"\b(?:delete|forget|remove|erase|clear|save)\b", lower)):
+        return _memory_list_text(_memory_groups(list_memories(200)))
 
-    match = re.match(
-        r"^(?:forget|delete|remove)\s+(?:that\s+)?(?:memory\s+)?(?:about\s+|that\s+)?(.+)$",
-        text, flags=re.I
+    # A clearly referential deletion can be resolved only against a recently
+    # acknowledged, exact saved fact. Never guess based on general discussion.
+    if re.search(r"\b(?:delete|forget|remove|erase)\b", lower) and re.search(
+            r"\b(?:this|that|it)\s+memor(?:y|ies)\b", lower):
+        recent = [str(m.get("content", "")) for m in conversation_history[-6:]
+                  if m.get("role") == "assistant"]
+        saved = next((re.match(r"^(?:Saved personal memory:|I'll remember that:)\s*(.+?)\.?$", item, re.I)
+                      for item in reversed(recent)
+                      if re.match(r"^(?:Saved personal memory:|I'll remember that:)", item, re.I)), None)
+        if saved:
+            saved_fact = saved.group(1).strip(" .")
+            groups = _memory_groups(list_memories(200))
+            exact = [g for g in groups
+                     if _normalize(g["information"]) == _normalize(saved_fact)]
+            if len(exact) == 1:
+                ok, _, error = _delete_memory_group(exact[0])
+                return (f"Forgot {exact[0]['display']}." if ok else
+                        "I couldn't safely delete that memory. " + str(error))
+        return "Which memory should I delete? Please tell me the saved fact. Nothing was deleted."
+
+    # Confirm/cancel a previously previewed bulk deletion. The plan is in-memory
+    # only and expires naturally on process restart; IDs are revalidated first.
+    if re.search(r"\b(?:cancel|never mind|stop)\b", lower) and re.search(r"\b(?:memory|memories|deletion|delete)\b", lower):
+        if _pending_memory_bulk_delete:
+            _pending_memory_bulk_delete = None
+            return "Okay. No memories were deleted."
+    if _pending_memory_bulk_delete and re.search(r"\bconfirm\b", lower) and re.search(r"\b(?:delete|deletion|memories|memory)\b", lower):
+        plan = _pending_memory_bulk_delete
+        current_ids = {int(row["id"]) for row in list_memories(200)}
+        if not set(plan["ids"]).issubset(current_ids):
+            _pending_memory_bulk_delete = None
+            return "Your memory list changed since the preview. Nothing was deleted. Please review the list and try again."
+        deleted = 0
+        for memory_id in plan["ids"]:
+            result = vision_tools.execute_tool("delete_personal_memory", {"memory_id": memory_id})
+            if not result.get("success"):
+                _pending_memory_bulk_delete = None
+                return "I stopped because one record could not be deleted. Please refresh your memories and review the result."
+            deleted += 1
+        _pending_memory_bulk_delete = None
+        return f"Deleted {deleted} saved memory record(s). Your retained memory was left unchanged."
+
+    # Bulk delete is preview-only until the user explicitly confirms.
+    if _is_bulk_memory_delete(lower):
+        rows = list_memories(200)
+        if not rows:
+            return "You have no saved personal memories to delete."
+        keep_name = bool(re.search(r"\bexcept\b.{0,40}\b(?:my\s+)?name\b", lower))
+        keep_ids = set()
+        if keep_name:
+            for group in _memory_groups(rows):
+                if group["identity"][0] == "profile" and group["identity"][1] == "user":
+                    keep_ids.update(int(r["id"]) for r in group["rows"])
+            if not keep_ids:
+                return "I couldn't identify a saved memory for your name, so nothing was deleted."
+        delete_ids = [int(row["id"]) for row in rows if int(row["id"]) not in keep_ids]
+        if not delete_ids:
+            return "There are no other memories to delete."
+        _pending_memory_bulk_delete = {"ids": delete_ids, "keep_ids": sorted(keep_ids)}
+        keep_text = " Your name memory will be kept." if keep_name else " All saved memories are included."
+        return (f"I found {len(delete_ids)} memory record(s) to delete.{keep_text} "
+                "Nothing has been deleted yet. Say 'confirm delete memories' to proceed, or 'cancel memory deletion' to keep everything.")
+
+    list_intent = lower in {
+        "what do you remember about me", "what do you remember",
+        "show my memories", "list my memories", "tell me what you remember",
+        "what have you remembered about me", "show everything you remember about me",
+    } or bool(re.search(r"\b(?:show|list|read|tell me)\b.{0,35}\b(?:memories|memory|remembered facts)\b", lower))
+    if list_intent:
+        return _memory_list_text(_memory_groups(list_memories(200)))
+
+    # Questions about a numbered memory are read-only SQLite lookups. This
+    # catches natural phrasing such as "Which memory is the first one in my
+    # saved memories?" so it never falls through to Gemini/Qwen tool calling.
+    position_match = re.search(
+        r"\b(?:which|what)\s+(?:is\s+)?(?:the\s+)?"
+        r"(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|"
+        r"1st|2nd|3rd|4th|5th|6th|7th|8th|9th|10th|one|two|three|four|"
+        r"five|six|seven|eight|nine|ten|\d+)\s+(?:one\s+)?"
+        r"(?:saved\s+)?mem(?:ory|ories)\b|"
+        r"\b(?:which|what)\s+(?:saved\s+)?mem(?:ory|ories)\s+"
+        r"(?:is\s+)?(?:the\s+)?"
+        r"(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|"
+        r"1st|2nd|3rd|4th|5th|6th|7th|8th|9th|10th|one|two|three|four|"
+        r"five|six|seven|eight|nine|ten|\d+)\b",
+        lower,
     )
-    if match and not re.search(r"\b(?:task|note|shopping list)\b", lower):
-        status, result = forget_matching(match.group(1).strip(" .!"))
-        if status == "deleted":
-            return f"Forgot: {result['information']}."
-        if status == "ambiguous":
-            return "Several memories match that description. Please be more specific."
-        return "I couldn't find that saved memory."
+    if position_match:
+        token = next((g for g in position_match.groups() if g), None)
+        ordinal_words = {
+            "first": 1, "1st": 1, "one": 1, "second": 2, "2nd": 2, "two": 2,
+            "third": 3, "3rd": 3, "three": 3, "fourth": 4, "4th": 4, "four": 4,
+            "fifth": 5, "5th": 5, "five": 5, "sixth": 6, "6th": 6, "six": 6,
+            "seventh": 7, "7th": 7, "seven": 7, "eighth": 8, "8th": 8, "eight": 8,
+            "ninth": 9, "9th": 9, "nine": 9, "tenth": 10, "10th": 10, "ten": 10,
+        }
+        number = ordinal_words.get(token, int(token) if token and token.isdigit() else None)
+        groups = _memory_groups(list_memories(200))
+        if not groups:
+            return "You have no saved personal memories yet."
+        if number is None or number < 1 or number > len(groups):
+            return f"You have {len(groups)} unique saved memories. I couldn't find that position."
+        return f"Your memory number {number} is: {groups[number - 1]['display']}."
+
+    deletion_verb = bool(re.search(r"\b(?:forget|delete|remove|erase)\b", lower))
+    memory_domain = bool(re.search(r"\b(?:memor(?:y|ies)|remembered|remember|points?|facts?|things?)\b", lower))
+    recently_listed_memories = any(
+        "here is what i remember about you" in str(item.get("content", "")).lower()
+        for item in conversation_history[-8:] if item.get("role") == "assistant"
+    )
+    ordinal = _memory_ordinal(text)
+    if deletion_verb and (memory_domain or (ordinal is not None and recently_listed_memories)):
+        if re.search(r"\b(?:task|note|shopping list|reminder)\b", lower):
+            return None
+        groups = _memory_groups(list_memories(200))
+        if not groups:
+            return "You have no saved personal memories to delete."
+        if ordinal is not None:
+            if ordinal < 1 or ordinal > len(groups):
+                return f"You have {len(groups)} unique saved memories. I couldn't find memory number {ordinal}."
+            target = groups[ordinal - 1]
+            ok, count, error = _delete_memory_group(target)
+            if ok:
+                suffix = f" I also removed {count - 1} duplicate saved copy/copies." if count > 1 else ""
+                return f"Forgot {target['display']}.{suffix}"
+            return "I couldn't safely delete that memory. " + str(error)
+
+        description = re.sub(r"^(?:please\s+)?(?:forget|delete|remove|erase)\s+", "", text, flags=re.I).strip(" .!?")
+        description = re.sub(r"^(?:my\s+)?(?:saved\s+)?(?:memory|fact|entry|item)\s*(?:about|named|called|:|,)\s*", "", description, flags=re.I).strip(" .!?")
+        description = re.sub(r"^(?:about|that)\s+", "", description, flags=re.I).strip(" .!?")
+        # Accept natural possessive phrasing, e.g. "delete my temporary deletion test memory".
+        description = re.sub(r"^(?:my|the)\s+", "", description, flags=re.I).strip(" .!?")
+        description = re.sub(r"\s+(?:memory|fact|entry)$", "", description, flags=re.I).strip(" .!?")
+        if not description or description.lower() in {"it", "that", "this", "one", "all"}:
+            return "Which saved memory would you like me to forget? You can describe it or ask me to show your memories."
+        target, matches, suggestion = _memory_group_for_description(groups, description)
+        if suggestion:
+            return f"Did you mean {suggestion['display']}? Nothing was deleted. Please confirm using its description."
+        if len(matches) > 1:
+            return "More than one saved memory matches that description. Nothing was deleted. Please be more specific."
+        if target:
+            ok, count, error = _delete_memory_group(target)
+            if ok:
+                suffix = f" I also removed {count - 1} duplicate saved copy/copies." if count > 1 else ""
+                return f"Forgot {target['display']}.{suffix}"
+            return "I couldn't safely delete that memory. " + str(error)
+        return "No matching memory was found. Nothing was deleted."
 
     for pattern in (
-        r"^remember that\s+(.+)$",
-        r"^remember this\s*[:,-]?\s+(.+)$",
-        r"^please remember\s+(.+)$",
+        r"^remember that\s+(.+)$", r"^remember this\s*[:,-]?\s+(.+)$",
+        r"^please remember\s+(.+)$", r"^remember\s+(.+)$",
+        r"^don't forget that\s+(.+)$", r"^do not forget that\s+(.+)$",
         r"^save this to my memory\s*[:,-]?\s+(.+)$",
     ):
         match = re.match(pattern, text, flags=re.I)
@@ -973,13 +1319,17 @@ def handle_memory(user_message):
             fact = match.group(1).strip(" .!")
             if not fact:
                 return "Tell me what you want me to remember."
-            memory_id = remember(fact)
-            print(f"[MEMORY SAVED] id={memory_id} text={fact!r}")
-            return f"I've saved this to memory: {fact}."
-
+            try:
+                memory_id = remember(fact)
+                stored = next((r for r in list_memories(200) if int(r["id"]) == int(memory_id)), None)
+                if stored is None:
+                    return "I couldn't verify that memory save in SQLite."
+                print(f"[MEMORY SAVED] text={stored['information']!r}")
+                return f"I'll remember that: {stored['information']}."
+            except Exception as exc:
+                print("[MEMORY SAVE ERROR]", repr(exc))
+                return "I couldn't save that memory. Please try again."
     return None
-
-
 
 
 # ---------------------- NATIVE TOOL CALLING -----------------------
@@ -992,29 +1342,31 @@ _TOOL_PARAM_TYPES = {
 }
 
 def _provider_schema(schema, provider="ollama"):
-    """Translate standard JSON Schema types for Gemini or Ollama."""
+    """Translate tool JSON Schema into the provider's supported schema subset.
+
+    Python's generated schemas can contain JSON-Schema keywords such as
+    ``nullable`` and ``additionalProperties``. Gemini's function declaration
+    schema is stricter, so remove those keywords before sending the request.
+    """
     schema = dict(schema or {})
+    if provider == "gemini":
+        schema.pop("nullable", None)
+        schema.pop("additionalProperties", None)
+
     kind = schema.get("type", "object")
     if provider == "gemini":
         schema["type"] = {
             "object": "OBJECT", "string": "STRING", "integer": "INTEGER",
             "number": "NUMBER", "boolean": "BOOLEAN", "array": "ARRAY",
         }.get(kind, "STRING")
-        if "items" in schema:
-            schema["items"] = _provider_schema(schema["items"], provider)
-        if "properties" in schema:
-            schema["properties"] = {
-                key: _provider_schema(value, provider)
-                for key, value in schema["properties"].items()
-            }
-    else:
-        if "items" in schema:
-            schema["items"] = _provider_schema(schema["items"], provider)
-        if "properties" in schema:
-            schema["properties"] = {
-                key: _provider_schema(value, provider)
-                for key, value in schema["properties"].items()
-            }
+
+    if "items" in schema:
+        schema["items"] = _provider_schema(schema["items"], provider)
+    if "properties" in schema:
+        schema["properties"] = {
+            key: _provider_schema(value, provider)
+            for key, value in schema["properties"].items()
+        }
     return schema
 
 
@@ -1044,7 +1396,8 @@ def _is_tool_intent(user_message):
     return bool(re.search(
         r"\b(?:remind(?:er)?s?|tasks?|to-?do|notes?|remember|memory|"
         r"forget|save (?:this|that|my)|delete|remove|complete|finish|"
-        r"reopen|what do you remember|what is my .{0,40} name|(?:mum|mom|mother|father|dad) name)\b",
+        r"reopen|what do you remember|which memory|what memory|saved memories|"
+        r"what is my .{0,40} name|(?:mum|mom|mother|father|dad) name)\b",
         user_message, flags=re.I
     ))
 
@@ -1064,8 +1417,10 @@ def _tool_system_instruction():
         "remember about me?', retrieve stored memories instead of saving. "
         "For task and reminder requests, select the appropriate creation, list, "
         "completion, reopening, or deletion tool. Never confuse a task with a reminder. "
-        "For deletion by position, list the records first, then use actual database "
-        "IDs, not list positions. If the target is ambiguous, ask for clarification. "
+        "For memory deletion, use the memory's saved wording or its current visible "
+        "list position through the content-based delete_personal_memory_by_text tool. "
+        "Never ask the user for a database ID and never expose database IDs. "
+        "If multiple memories match, ask for a more specific description. "
         "Use the supplied local date/time to interpret relative dates. "
         "Ask for a missing required reminder time instead of inventing one. "
         "Never invent saved facts or IDs. Never claim that an action succeeded "
@@ -1118,7 +1473,18 @@ def _gemini_tool_turn(messages):
             # Preserve the router's four-second online-first first-response policy.
             timeout=(5, ONLINE_FIRST_TOKEN_TIMEOUT),
         )
-        response.raise_for_status()
+        if not response.ok:
+            # Google returns a useful JSON error body (invalid model, schema,
+            # unsupported field, quota, etc.). Include it in local logs so a
+            # 400 is diagnosable instead of silently falling through.
+            try:
+                detail = response.json().get("error", {}).get("message") or response.text
+            except ValueError:
+                detail = response.text
+            raise requests.HTTPError(
+                f"Gemini HTTP {response.status_code}: {str(detail)[:1200]}",
+                response=response,
+            )
         data = response.json()
         parts = ((data.get("candidates") or [{}])[0].get("content") or {}).get("parts", [])
         calls = [part["functionCall"] for part in parts if "functionCall" in part]
@@ -1197,6 +1563,22 @@ def _ollama_tool_turn(messages):
     return "I completed the available tool steps, but couldn't prepare a final response. Please check the dashboard."
 
 
+# ------------------ SAFE CROSS-DOMAIN DELETION ------------------
+
+def _guard_cross_domain_deletion(user_message):
+    """Stop a mixed memory/task request from crossing into the wrong handler."""
+    lower = _normalize(user_message)
+    if not re.search(r"\b(?:delete|remove|forget|erase|clear)\b", lower):
+        return None
+    memory_domain = bool(re.search(r"\b(?:memories|memory|remembered facts|points about me|facts about me)\b", lower))
+    task_domain = bool(re.search(r"\b(?:tasks?|notes?|to[ -]?dos?|reminders?)\b", lower))
+    if memory_domain and task_domain:
+        return ("I heard references to both memories and tasks or reminders. "
+                "Nothing was deleted. Please tell me which item you want removed.")
+    return None
+
+
+
 # -------------------------- MAIN ROUTER -------------------------
 
 def ask_ai(user_message):
@@ -1204,6 +1586,42 @@ def ask_ai(user_message):
         return "Please say something."
 
     user_message = user_message.strip()
+
+    # Explicit profile questions and corrections take precedence over general
+    # memory commands; only a validated name may be saved.
+    try:
+        profile_response = handle_profile_memory(user_message)
+        if profile_response is not None:
+            update_conversation_history(user_message, profile_response)
+            conversation_context.observe(user_message, profile_response)
+            return clean_ai_response(profile_response)
+    except Exception as exc:
+        print("[Profile memory handler error]", repr(exc))
+        return "I couldn't safely process that name. No changes were confirmed."
+
+    # Memory reads, saves and deletions are deterministic and must run before
+    # the cross-domain/task handlers so "forget the first memory" is not
+    # interpreted as a task ordinal or routed to an LLM.
+    try:
+        memory_response = handle_memory(user_message)
+        if memory_response is not None:
+            update_conversation_history(user_message, memory_response)
+            conversation_context.observe(user_message, memory_response)
+            return clean_ai_response(memory_response)
+    except Exception as exc:
+        print("[Memory handler error]", repr(exc))
+        return "I couldn't safely process that memory request. Nothing was changed."
+
+    # Cross-domain safety must run BEFORE reminder, follow-up, and task handlers.
+    # Those legacy handlers can otherwise interpret "first point" as "first task".
+    try:
+        deletion_guard_reply = _guard_cross_domain_deletion(user_message)
+        if deletion_guard_reply is not None:
+            update_conversation_history(user_message, deletion_guard_reply)
+            return deletion_guard_reply
+    except Exception as exc:
+        print("[Memory deletion guard error]", repr(exc))
+        return "I couldn't safely identify that memory. Nothing was deleted."
 
     # Reminders are explicit deterministic database operations, not LLM promises.
     try:
@@ -1255,6 +1673,16 @@ def ask_ai(user_message):
             return clean_ai_response(memory_response)
     except Exception as exc:
         print("[Memory handler error]", repr(exc))
+
+    # Unhandled memory wording is not permission for a model to write to the
+    # database. Ask for a precise memory operation rather than letting Gemini
+    # or Qwen hallucinate a memory save or deletion.
+    if re.search(r"\b(?:remember|remembered|memories|memory)\b", user_message, re.I):
+        safe_reply = ("I didn't identify a memory command. You can ask what I "
+                      "remember, or explicitly say 'remember that ...' or "
+                      "'delete the memory about ...'. Nothing was changed.")
+        update_conversation_history(user_message, safe_reply)
+        return safe_reply
 
     # Knowledge questions use only local indexed files; task and memory
     # commands were already processed above.

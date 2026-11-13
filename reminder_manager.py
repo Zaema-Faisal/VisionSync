@@ -102,10 +102,34 @@ def recent_tasks(days=7, pending_only=False, now=None):
             raise
     return [dict(x) for x in rows]
 
+# Normalize common spoken intervals before date parsing and title extraction.
+# Keep this scoped to relative-time phrases so task/reminder titles are not changed.
+_SPOKEN_INTERVAL_NUMBERS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9,
+    "ten": 10, "eleven": 11, "twelve": 12, "fifteen": 15,
+    "twenty": 20, "thirty": 30, "forty": 40, "forty-five": 45,
+    "fifty": 50, "sixty": 60,
+}
+
+def _normalize_spoken_intervals(text):
+    words = "|".join(sorted(map(re.escape, _SPOKEN_INTERVAL_NUMBERS), key=len, reverse=True))
+    unit = r"(?:minutes?|mins?|hours?|hrs?)"
+    # e.g. 'in ten minutes', 'after fifteen mins', 'ten minutes from now'.
+    expression = re.compile(
+        rf"\b(?:(in|after)\s+({words})\s+({unit})|({words})\s+({unit})\s+(from\s+now))\b",
+        re.I,
+    )
+    def rewrite(match):
+        if match.group(1):
+            return f"{match.group(1)} {_SPOKEN_INTERVAL_NUMBERS[match.group(2).lower()]} {match.group(3)}"
+        return f"{_SPOKEN_INTERVAL_NUMBERS[match.group(4).lower()]} {match.group(5)} {match.group(6)}"
+    return expression.sub(rewrite, text)
+
 # Controlled date parser for spoken reminders. Requires a clear reminder command.
 def parse_when(text, now=None):
     now=now or datetime.now()
-    value=text.lower().strip().rstrip(' .!?')
+    value=_normalize_spoken_intervals(text).lower().strip().rstrip(' .!?')
 
     # Relative reminders use the system-local clock, not the 9 AM default.
     # Round UP to the next whole minute because SQLite stores due_at only
@@ -178,26 +202,19 @@ def reset_reminder_context():
 
 
 def _extract_title(content):
-    title = re.sub(
+    content = _normalize_spoken_intervals(content)
+    content = re.sub(
         r'\b(?:in|after)\s+(?:\d+\s*(?:minutes?|mins?|hours?|hrs?)|half\s+an?\s+hour|an?\s+hour)\b'
         r'|\b\d+\s*(?:minutes?|mins?|hours?|hrs?)\s+from\s+now\b',
-        '', content, flags=re.I
+        '', content, flags=re.I,
     )
-    title = re.sub(r'\b(?:at\s+)?\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)\b', '', title, flags=re.I)
+    # Strip leftover leading 'to' from 'in 10 minutes to drink water'.
+    title = re.sub(r'\b(?:at\s+)?\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)\b', '', content, flags=re.I)
     title = re.sub(
         r'\b(?:on\s+\d{4}-\d{2}-\d{2}|on\s+[a-z]+\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+\d{4})?|in\s+\d+\s+days?|day after tomorrow|tomorrow|today)\b',
-        '', title, flags=re.I
+        '', title, flags=re.I,
     )
-    title = title.strip(' ,.:;!-')
-    # Remove filler repeatedly so "for me that I have to go..." becomes "go...".
-    for _ in range(5):
-        cleaned = re.sub(
-            r'^(?:for\s+me|that\s+i\s+(?:have|need|want)\s+to|i\s+(?:have|need|want)\s+to|that|to|please)\b[\s,.:;!-]*',
-            '', title, flags=re.I
-        ).strip(' ,.:;!-')
-        if cleaned == title:
-            break
-        title = cleaned
+    title = re.sub(r'^(?:to|that)\s+', '', title.strip(' ,.:;!-'), flags=re.I)
     return re.sub(r'\s+', ' ', title).strip(' ,.:;!-')
 
 
@@ -222,111 +239,10 @@ def _schedule(title, when, now, explicit_time=True):
     return _format_saved(row, explicit_time)
 
 
-_NUMBER_WORDS = {
-    'one': 1, 'first': 1, 'two': 2, 'second': 2, 'three': 3, 'third': 3,
-    'four': 4, 'fourth': 4, 'five': 5, 'fifth': 5, 'six': 6, 'sixth': 6,
-    'seven': 7, 'seventh': 7, 'eight': 8, 'eighth': 8, 'nine': 9,
-    'ninth': 9, 'ten': 10, 'tenth': 10,
-}
-_NUMBER_TOKEN = r'(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|one|two|three|four|five|six|seven|eight|nine|ten|\d+(?:st|nd|rd|th)?)'
-
-def _number_value(token):
-    token = token.lower().strip()
-    if token in _NUMBER_WORDS:
-        return _NUMBER_WORDS[token]
-    match = re.fullmatch(r'(\d+)(?:st|nd|rd|th)?', token)
-    return int(match.group(1)) if match else None
-
-
-def _reminder_indices(message, count):
-    """Return 1-based snapshot positions, None if text contains no ordinal.
-    Returns an error string instead of silently selecting a different reminder.
-    """
-    # "first two" and "last 3" mean ranges, not item number two or three.
-    first_last = re.search(r'\b(first|last)\s+(' + _NUMBER_TOKEN + r')\s+reminders?\b', message)
-    if first_last:
-        n = _number_value(first_last.group(2))
-        if n is None or n < 1 or n > count:
-            return f"You only have {count} upcoming reminders. Nothing was deleted."
-        return list(range(1, n + 1)) if first_last.group(1) == 'first' else list(range(count - n + 1, count + 1))
-
-    # Also permit "delete first two" when the final noun was transcribed once.
-    first_last = re.search(r'\b(first|last)\s+(' + _NUMBER_TOKEN + r')\b', message)
-    if first_last and _number_value(first_last.group(2)) is not None:
-        n = _number_value(first_last.group(2))
-        if n < 1 or n > count:
-            return f"You only have {count} upcoming reminders. Nothing was deleted."
-        return list(range(1, n + 1)) if first_last.group(1) == 'first' else list(range(count - n + 1, count + 1))
-
-    # Explicit multiple positions: "first and third reminders", "reminder 1 and 3".
-    pair = re.search(r'\b(' + _NUMBER_TOKEN + r')\s+and\s+(' + _NUMBER_TOKEN + r')\b', message)
-    if pair:
-        numbers = [_number_value(pair.group(1)), _number_value(pair.group(2))]
-    else:
-        single = re.search(
-            r'\b(?:reminders?\s+(?:number\s+)?|number\s+|the\s+)(' + _NUMBER_TOKEN + r')\b' 
-            r'|\b(' + _NUMBER_TOKEN + r')\s+reminders?\b', message
-        )
-        if not single:
-            return None
-        numbers = [_number_value(single.group(1) or single.group(2))]
-    if any(n is None or n < 1 or n > count for n in numbers):
-        return f"You only have {count} upcoming reminders. Nothing was deleted."
-    return list(dict.fromkeys(numbers))
-
-
-def _reminder_target_day(message, now):
-    if 'day after tomorrow' in message:
-        return now.date() + timedelta(days=2)
-    if re.search(r'\btomorrow\b', message):
-        return now.date() + timedelta(days=1)
-    if re.search(r'\btoday\b', message):
-        return now.date()
-    match = re.search(r'\b(?:on|for)\s+(\d{4})-(\d{2})-(\d{2})\b', message)
-    if match:
-        try:
-            return date(*map(int, match.groups()))
-        except ValueError:
-            return 'invalid'
-    match = re.search(r'\b(?:on|for)\s+([a-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(\d{4}))?\b', message)
-    if match:
-        month_names = {n.lower(): i for i, n in enumerate(calendar.month_name) if n}
-        month_names.update({n.lower(): i for i, n in enumerate(calendar.month_abbr) if n})
-        month = month_names.get(match.group(1))
-        if month:
-            year = int(match.group(3)) if match.group(3) else now.year
-            try:
-                result = date(year, month, int(match.group(2)))
-                if not match.group(3) and result < now.date():
-                    result = date(year + 1, month, int(match.group(2)))
-                return result
-            except ValueError:
-                return 'invalid'
-    match = re.search(r'\bin\s+(\d+)\s+days?\b', message)
-    return now.date() + timedelta(days=int(match.group(1))) if match else None
-
-
-def _delete_reminders_batch(ids):
-    # Atomically delete only selected still-pending IDs, without touching tasks.
-    identifiers = list(dict.fromkeys(int(x) for x in ids))
-    if not identifiers:
-        return []
-    with _connect(REMINDER_DB) as conn:
-        placeholders = ','.join('?' for _ in identifiers)
-        existing = conn.execute(
-            f"SELECT id FROM reminders WHERE status='pending' AND id IN ({placeholders})",
-            identifiers,
-        ).fetchall()
-        if len(existing) != len(identifiers):
-            return []
-        conn.execute(f"DELETE FROM reminders WHERE status='pending' AND id IN ({placeholders})", identifiers)
-    return identifiers
-
-
 def handle_reminder_command(message, now=None):
     global _pending_reminder
     now = now or datetime.now()
-    text = str(message).strip()
+    text = _normalize_spoken_intervals(str(message).strip())
     lower = text.lower().strip().rstrip(' .!?')
     time_is_explicit = bool(re.search(
         r'\b\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)\b'
@@ -354,7 +270,7 @@ def handle_reminder_command(message, now=None):
         r"\b(?:delete|remove|cancel|complete)\s+(?:my\s+)?reminder\b",
         lower
     ))
-    if asking_for_reminders and not creating_reminder and not modifying_reminder and not re.search(r"\b(?:delete|remove|cancel)\b", lower):
+    if asking_for_reminders and not creating_reminder and not modifying_reminder:
         rows = list_reminders()
         print(f"[REMINDER DB READ] count={len(rows)} question={text!r}")
         if not rows:
@@ -377,71 +293,155 @@ def handle_reminder_command(message, now=None):
             f"{i}. {x['title']}, {datetime.fromisoformat(x['due_at']).strftime('%B %d at %I:%M %p')}"
             for i,x in enumerate(rows,1)) +'.'
 
-    # Reminder actions are resolved against ONE stable, due-date-sorted snapshot.
-    # Spoken "number 2" is list position 2, never SQLite ID 2.
+    # Reminder deletion must be handled here before the task/note router.
+    # "Delete my reminder number one" refers to the first item in the
+    # upcoming-reminders list, NOT a task number or the SQLite row ID.
     deleting_reminder = bool(re.search(
-        r"\b(?:delete|remove|cancel)\b.*\breminders?\b", lower
+        r"\b(?:delete|remove|cancel)\b.*\breminders?\b", lower, re.I
     ))
     if deleting_reminder:
         rows = list_reminders()
         if not rows:
             return "You have no upcoming reminders to delete."
-        target_day = _reminder_target_day(lower, now)
-        if target_day == "invalid":
-            return "I couldn't understand that reminder date. Nothing was deleted."
-        candidates = rows if target_day is None else [
-            x for x in rows if datetime.fromisoformat(x['due_at']).date() == target_day
-        ]
-        if not candidates:
-            return f"You have no upcoming reminders for {target_day.strftime('%B %d')}."
 
-        # "first two" / "last 3" / "first and third" / "reminders 1 and 3"
-        # are positions in the displayed list. Never silently reinterpret IDs.
-        indices = _reminder_indices(lower, len(candidates))
-        if isinstance(indices, str):
-            return indices
-        if indices is None:
-            if re.search(r'\b(?:all|every)\s+(?:(?:of|my|the)\s+)*reminders?\b', lower) or re.search(
-                r'\breminders?\s+(?:for\s+)?(?:today|tomorrow)\b', lower
-            ) and re.search(r'\b(?:all|every)\b', lower):
-                selected = candidates
-            elif target_day is not None:
-                # Date-only deletion is potentially destructive: make selection explicit.
-                if len(candidates) != 1:
-                    return (f"There are {len(candidates)} reminders for "
-                            f"{target_day.strftime('%B %d')}. Say 'delete all reminders "
-                            "for that day' or specify a reminder number.")
-                selected = candidates
-            else:
-                query = re.sub(
-                    r'^\s*(?:please\s+)?(?:delete|remove|cancel)\s+(?:(?:my|the)\s+)?reminders?\s*',
-                    '', text, flags=re.I
-                ).strip(' .,!?:;')
-                if not query:
-                    return "Which reminder should I delete? Say its list number or title."
-                matches = [x for x in rows if query.casefold() in x['title'].casefold()]
-                if len(matches) == 0:
-                    return f"I couldn't find an upcoming reminder matching '{query}'. Nothing was deleted."
-                if len(matches) > 1:
-                    return (f"I found {len(matches)} reminders matching '{query}'. "
-                            "Please specify the list number. Nothing was deleted.")
-                selected = matches
+        # Convert spoken ordinal/cardinal words to the same 1-based ordering
+        # used by the upcoming-reminders response and dashboard.
+        number_words = {
+            "one": 1, "first": 1, "two": 2, "second": 2,
+            "three": 3, "third": 3, "four": 4, "fourth": 4,
+            "five": 5, "fifth": 5, "six": 6, "sixth": 6,
+            "seven": 7, "seventh": 7, "eight": 8, "eighth": 8,
+            "nine": 9, "ninth": 9, "ten": 10, "tenth": 10,
+        }
+        ordinal_match = re.search(
+            r"\b(?:reminder\s+(?:number\s+)?|number\s+)"
+            r"(first|second|third|fourth|fifth|sixth|seventh|eighth|"
+            r"ninth|tenth|one|two|three|four|five|six|seven|eight|"
+            r"nine|ten|\d+)\b"
+            r"|\b(first|second|third|fourth|fifth|sixth|seventh|"
+            r"eighth|ninth|tenth)\s+reminder\b",
+            lower
+        )
+
+        # A date can identify one reminder, or several reminders on that day.
+        target_day = None
+        if re.search(r"\bday after tomorrow\b", lower):
+            target_day = now.date() + timedelta(days=2)
+        elif re.search(r"\btomorrow\b", lower):
+            target_day = now.date() + timedelta(days=1)
+        elif re.search(r"\btoday\b", lower):
+            target_day = now.date()
+        elif (m := re.search(r"\b(?:on|for)\s+(\d{4})-(\d{2})-(\d{2})\b", lower)):
+            try:
+                target_day = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            except ValueError:
+                return "I couldn't understand that reminder date."
+        elif (m := re.search(
+            r"\b(?:on|for)\s+([a-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(\d{4}))?\b",
+            lower
+        )):
+            month_names = {name.lower(): i for i, name in enumerate(calendar.month_name) if name}
+            month_names.update({name.lower(): i for i, name in enumerate(calendar.month_abbr) if name})
+            month = month_names.get(m.group(1))
+            if month:
+                year = int(m.group(3)) if m.group(3) else now.year
+                try:
+                    target_day = date(year, month, int(m.group(2)))
+                    if not m.group(3) and target_day < now.date():
+                        target_day = date(year + 1, month, int(m.group(2)))
+                except ValueError:
+                    return "I couldn't understand that reminder date."
+        elif (m := re.search(r"\bin\s+(\d+)\s+days?\b", lower)):
+            target_day = now.date() + timedelta(days=int(m.group(1)))
+
+        candidates = rows
+        if target_day is not None:
+            candidates = [
+                item for item in rows
+                if datetime.fromisoformat(item["due_at"]).date() == target_day
+            ]
+            if not candidates:
+                return f"You have no upcoming reminders for {target_day.strftime('%B %d')}."
+
+        # If the user named a reminder rather than a number/date, match its title.
+        if target_day is None and ordinal_match is None:
+            query = re.sub(
+                r"^(?:please\s+)?(?:delete|remove|cancel)\s+"
+                r"(?:my\s+)?reminders?\s*", "", text, flags=re.I
+            ).strip(" .,!?:;")
+            if query:
+                matches = [
+                    item for item in rows
+                    if query.lower() in item["title"].lower()
+                ]
+                if len(matches) == 1:
+                    candidates = matches
+                elif len(matches) > 1:
+                    options = "; ".join(
+                        f"{i}. {item['title']}"
+                        for i, item in enumerate(matches, 1)
+                    )
+                    return f"I found multiple matching reminders: {options}. Which number should I delete?"
+                else:
+                    return f"I couldn't find an upcoming reminder matching '{query}'."
+
+        if ordinal_match:
+            token = ordinal_match.group(1) or ordinal_match.group(2)
+            index = number_words.get(token, int(token) if token.isdigit() else None)
+            # When a date was specified, allow the ordinal to select within
+            # that day's matching reminders; otherwise use the full list.
+            if index is None or index < 1 or index > len(candidates):
+                return f"I couldn't find reminder number {token}."
+            selected = candidates[index - 1]
+        elif len(candidates) == 1:
+            selected = candidates[0]
+        elif len(candidates) > 1:
+            options = "; ".join(
+                f"{i}. {item['title']} at "
+                f"{datetime.fromisoformat(item['due_at']).strftime('%I:%M %p')}"
+                for i, item in enumerate(candidates, 1)
+            )
+            return (
+                f"There are {len(candidates)} reminders on "
+                f"{target_day.strftime('%B %d')}: {options}. "
+                "Which number should I delete?"
+            )
         else:
-            selected = [candidates[i - 1] for i in indices]
+            # Try matching the reminder title after removing the command words.
+            query = re.sub(
+                r"^(?:please\s+)?(?:delete|remove|cancel)\s+"
+                r"(?:my\s+)?reminders?\s*", "", text, flags=re.I
+            ).strip(" .,!?:;")
+            query = re.sub(
+                r"\b(?:for|on)\s+(?:tomorrow|today|day after tomorrow|"
+                r"[a-z]+\s+\d{1,2}(?:st|nd|rd|th)?|\d{4}-\d{2}-\d{2})\b",
+                "", query, flags=re.I
+            ).strip(" .,!?:;")
+            if query:
+                matches = [
+                    item for item in rows
+                    if query.lower() in item["title"].lower()
+                ]
+                if len(matches) == 1:
+                    selected = matches[0]
+                elif len(matches) > 1:
+                    options = "; ".join(
+                        f"{i}. {item['title']}"
+                        for i, item in enumerate(matches, 1)
+                    )
+                    return f"I found multiple matching reminders: {options}. Which number should I delete?"
+                else:
+                    return f"I couldn't find an upcoming reminder matching '{query}'."
+            else:
+                return "Which reminder should I delete? Say its number, title, or date."
 
-        # Single SQLite transaction for a batch; only report actually deleted rows.
-        deleted = _delete_reminders_batch([x['id'] for x in selected])
-        if not deleted:
-            return "I couldn't delete the selected reminders. Nothing was changed."
-        names = [x['title'] for x in selected if x['id'] in deleted]
-        print(f"[REMINDERS DELETED] ids={deleted} titles={names!r}")
-        if len(names) == 1:
-            return f"Deleted reminder: {names[0]}."
-        return f"Deleted {len(names)} reminders: " + "; ".join(names) + "."
-
-    # Avoid forwarding unsupported reminder mutations to a language model.
-    if re.search(r'\b(?:edit|change|move|reschedule|update|postpone|delete|remove|cancel)\b', lower) and re.search(r'\breminders?\b', lower):
-        return "I can't safely complete that reminder change yet. Nothing was changed."
+        if delete_reminder(selected["id"]):
+            print(
+                f"[REMINDER DELETED] id={selected['id']} "
+                f"title={selected['title']!r}"
+            )
+            return f"Deleted reminder: {selected['title']}."
+        return "I couldn't delete that reminder. Please try again."
 
     # Follow-up to a reminder that was missing either a date or activity.
     # Date-only utterances must not go to the LLM for an invented confirmation.
